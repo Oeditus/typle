@@ -15,10 +15,10 @@ defmodule Typle.Inference.ExpanderTest do
     end
   end
 
-  describe "expand_expr/1" do
+  describe "expand_node/1" do
     test "expands pipe operator to nested function calls" do
       {:ok, ast} = Code.string_to_quoted("1 |> to_string() |> String.upcase()")
-      expanded = Expander.expand_expr(ast)
+      expanded = Expander.expand_node(ast)
 
       # After expansion, |> should be gone -- the top-level node should be
       # a remote call to String.upcase (or a dot-call form), not a pipe.
@@ -27,7 +27,7 @@ defmodule Typle.Inference.ExpanderTest do
 
     test "expands unless to case" do
       {:ok, ast} = Code.string_to_quoted("unless true, do: :never")
-      expanded = Expander.expand_expr(ast)
+      expanded = Expander.expand_node(ast)
 
       # After expansion, the top-level form should be :case, not :unless
       assert match?({:case, _, _}, expanded)
@@ -35,9 +35,9 @@ defmodule Typle.Inference.ExpanderTest do
 
     test "returns original AST unchanged on expansion failure" do
       # A bare variable reference -- ExPanda may raise or return {:error, _}.
-      # Either way, expand_expr should return the original.
+      # Either way, expand_node should return the original.
       ast = {:nonexistent_var, [line: 1, column: 1], nil}
-      result = Expander.expand_expr(ast)
+      result = Expander.expand_node(ast)
       assert is_tuple(result)
     end
   end

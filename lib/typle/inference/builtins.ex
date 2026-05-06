@@ -156,6 +156,27 @@ defmodule Typle.Inference.Builtins do
   def return_type(IO, :inspect, 1, [arg_type]), do: arg_type
   def return_type(IO, :inspect, 2, [arg_type, _opts]), do: arg_type
 
+  # -- :erlang operators (produced by :elixir_expand) ------------------------
+
+  def return_type(:erlang, op, 2, _args) when op in [:+, :-, :*],
+    do: Type.dynamic(Type.number())
+
+  def return_type(:erlang, :div, 2, _args), do: Type.dynamic(Type.integer())
+  def return_type(:erlang, :rem, 2, _args), do: Type.dynamic(Type.integer())
+  def return_type(:erlang, :/, 2, _args), do: Type.dynamic(Type.float())
+  def return_type(:erlang, :abs, 1, _args), do: Type.dynamic(Type.number())
+
+  def return_type(:erlang, op, 2, _args)
+      when op in [:==, :"/=", :"=:=", :"=/=", :>, :<, :>=, :"=<"],
+      do: Type.dynamic(Type.boolean())
+
+  def return_type(:erlang, :not, 1, _args), do: Type.dynamic(Type.boolean())
+  def return_type(:erlang, :andalso, 2, _args), do: Type.dynamic(Type.boolean())
+  def return_type(:erlang, :orelse, 2, _args), do: Type.dynamic(Type.boolean())
+
+  def return_type(:erlang, :++, 2, _args), do: Type.dynamic(Type.list())
+  def return_type(:erlang, :--, 2, _args), do: Type.dynamic(Type.list())
+
   # -- Fallback: not a known builtin -----------------------------------------
 
   def return_type(_module, _function, _arity, _args), do: nil

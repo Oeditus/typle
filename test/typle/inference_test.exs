@@ -25,13 +25,14 @@ defmodule Typle.InferenceTest do
       assert [_ | _] = lines
     end
 
-    test "infers correct type for integer literal in the fixture" do
+    test "infers integer type for guard-refined variables" do
       {:ok, type_map} = Inference.infer_file(@fixture_path)
 
-      # Line 23: `defp secret, do: 42` -- the 42 literal should be integer
+      # `def add(a, b) when is_integer(a) and is_integer(b)` refines
+      # `a` and `b` to integer(); these are recorded when referenced in the body.
       integer_entries =
         Enum.filter(type_map, fn {_pos, type} ->
-          type.kind == :integer and not type.dynamic?
+          type.kind == :integer
         end)
 
       assert [_ | _] = integer_entries
@@ -50,8 +51,7 @@ defmodule Typle.InferenceTest do
 
       has_binary =
         Enum.any?(types, fn type ->
-          type.kind == :binary or
-            (type.dynamic? and match?(%{kind: :binary}, type.inner))
+          type.kind == :binary
         end)
 
       assert has_binary, "Expected at least one binary type from pipe chain inference"

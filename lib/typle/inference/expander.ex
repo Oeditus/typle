@@ -1,25 +1,29 @@
 defmodule Typle.Inference.Expander do
+  @expand_timeout_ms 5_000
+
   @moduledoc """
   Macro expansion layer for the inference engine.
 
   Wraps `ExPanda` to produce fully-expanded ASTs before type inference.
-  Expansion is applied at the function-body level (not whole-module),
-  because the compiler's internal expander requires full compiler state
-  for `defmodule` forms.
+  Expansion is applied at the function-definition level (the full `def`/`defp`
+  form, not just the body), so that ExPanda's Walker registers function
+  parameters as variables before expanding the body. The outer `defmodule`
+  structure is preserved as-is because the compiler's internal expander
+  requires full compiler state for module forms.
 
-  When expansion fails for a body (e.g. a macro's defining module is not
-  loaded), the original unexpanded AST is returned so the inference engine
-  can fall back to its existing best-effort handling.
+  Each expansion is guarded by a timeout (default #{@expand_timeout_ms}ms)
+  to prevent hangs when `:elixir_expand` enters an infinite loop on
+  certain AST patterns.
   """
 
   require Logger
 
   @doc """
-  Parses a source file and expands macros in all function bodies.
+  Parses a source file and expands macros in all function definitions.
 
-  The module structure (`defmodule`, `def`/`defp`, `alias`, etc.) is
-  preserved as-is. Only the `:do` bodies of function definitions are
-  expanded via ExPanda.
+  The module structure (`defmodule`, `alias`, etc.) is preserved as-is.
+  Each `def`/`defp` form is expanded via ExPanda (including parameter
+  registration) with a per-definition timeout guard.
 
   Returns `{:ok, expanded_ast}` on success, or `{:error, reason}` if
   parsing fails.
@@ -28,48 +32,36 @@ defmodule Typle.Inference.Expander do
   def expand_file(file_path, _opts \\ []) do
     with {:ok, source} <- File.read(file_path),
          {:ok, ast} <- parse(source, file_path) do
-      {:ok, expand_bodies(ast)}
+      {:ok, with_quiet_stderr(fn -> expand_defs(ast) end)}
     end
   end
 
   @doc """
-  Expands macros in an expression-level AST node.
+  Expands macros in a full `def`/`defp` AST node (or expression).
 
-  On expansion failure, logs a debug message and returns the original
-  AST unchanged.
+  Uses `ExPanda.expand/1` with a timeout guard. On failure or timeout,
+  returns the original AST unchanged.
   """
-  @spec expand_expr(Macro.t()) :: Macro.t()
-  def expand_expr(ast) do
-    quiet_expand(ast)
+  @spec expand_node(Macro.t()) :: Macro.t()
+  def expand_node(ast) do
+    task = Task.async(fn -> ExPanda.expand(ast) end)
+
+    case Task.yield(task, @expand_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, expanded}} ->
+        strip_unexpanded_markers(expanded)
+
+      {:ok, {:error, reason}} ->
+        Logger.debug("ExPanda expansion failed: #{inspect(reason)}")
+        ast
+
+      nil ->
+        Logger.debug("ExPanda expansion timed out after #{@expand_timeout_ms}ms")
+        ast
+    end
   rescue
     e ->
-      Logger.debug("ExPanda expansion raised: #{inspect(e)}, using unexpanded AST")
+      Logger.debug("ExPanda expansion raised: #{inspect(e)}")
       ast
-  end
-
-  # Runs ExPanda.expand/1 with :standard_error redirected to a disposable
-  # StringIO so that :elixir_expand's "undefined variable" diagnostics
-  # (written directly to :standard_error) don't leak to the user's terminal.
-  defp quiet_expand(ast) do
-    {:ok, sink} = StringIO.open("")
-    original = Process.whereis(:standard_error)
-    Process.unregister(:standard_error)
-    Process.register(sink, :standard_error)
-
-    try do
-      case ExPanda.expand(ast) do
-        {:ok, expanded} ->
-          strip_unexpanded_markers(expanded)
-
-        {:error, reason} ->
-          Logger.debug("ExPanda expansion failed: #{inspect(reason)}, using unexpanded AST")
-          ast
-      end
-    after
-      Process.unregister(:standard_error)
-      Process.register(original, :standard_error)
-      StringIO.close(sink)
-    end
   end
 
   @doc false
@@ -98,25 +90,49 @@ defmodule Typle.Inference.Expander do
     )
   end
 
-  # Walk the module AST and expand only function bodies.
+  # Redirects :standard_error to a disposable StringIO for the duration of
+  # `fun`, so :elixir_expand diagnostics don't leak to the user's terminal.
+  defp with_quiet_stderr(fun) do
+    {:ok, sink} = StringIO.open("")
+    original = Process.whereis(:standard_error)
+    Process.unregister(:standard_error)
+    Process.register(sink, :standard_error)
 
-  defp expand_bodies({:defmodule, meta, [name, [do: body]]}) do
-    {:defmodule, meta, [name, [do: expand_bodies(body)]]}
+    try do
+      fun.()
+    after
+      Process.unregister(:standard_error)
+      Process.register(original, :standard_error)
+      StringIO.close(sink)
+    end
   end
 
-  defp expand_bodies({:__block__, meta, exprs}) do
-    {:__block__, meta, Enum.map(exprs, &expand_bodies/1)}
+  # Walk the module AST and expand each def/defp as a whole form
+  # (so ExPanda registers function parameters before expanding the body).
+
+  defp expand_defs({:defmodule, meta, [name, [do: body]]}) do
+    {:defmodule, meta, [name, [do: expand_defs(body)]]}
   end
 
-  defp expand_bodies({kind, meta, [head, body_kw]}) when kind in [:def, :defp] do
-    expanded_kw =
-      Keyword.update(body_kw, :do, nil, fn
-        nil -> nil
-        body -> expand_expr(body)
-      end)
-
-    {kind, meta, [head, expanded_kw]}
+  defp expand_defs({:__block__, meta, exprs}) do
+    {:__block__, meta, Enum.map(exprs, &expand_defs/1)}
   end
 
-  defp expand_bodies(other), do: other
+  defp expand_defs({kind, _meta, [original_head, _original_kw]} = def_form)
+       when kind in [:def, :defp] do
+    case expand_node(def_form) do
+      {^kind, expanded_meta, [_expanded_head, expanded_kw]} ->
+        # Preserve the original function head (including guards) so that
+        # Guard.refine can recognise `is_integer(x)`, `and`, etc.
+        # The compiler expansion rewrites guards into case/:erlang forms
+        # that the inference engine does not understand.
+        {kind, expanded_meta, [original_head, expanded_kw]}
+
+      _other ->
+        # Expansion returned something unexpected; keep original.
+        def_form
+    end
+  end
+
+  defp expand_defs(other), do: other
 end
