@@ -28,13 +28,13 @@ defmodule Typle.Inference.Expr do
 
   def infer({var_name, meta, ctx}, env) when is_atom(var_name) and is_atom(ctx) do
     type = Env.get_var(env, var_name)
-    env = maybe_record(env, meta, type)
+    env = maybe_record(env, meta, type, Atom.to_string(var_name))
     {type, env}
   end
 
   # -- Match operator: pattern = expr ----------------------------------------
 
-  def infer({:=, meta, [pattern, expr]}, env) do
+  def infer({:=, meta, [pattern, expr]} = node, env) do
     {expr_type, env} = infer(expr, env)
     {bindings, positions} = Pattern.infer(pattern, expr_type)
 
@@ -45,7 +45,7 @@ defmodule Typle.Inference.Expr do
         Env.put_var(acc, var, type)
       end)
 
-    env = maybe_record(env, meta, expr_type)
+    env = maybe_record(env, meta, expr_type, Macro.to_string(node))
     {expr_type, env}
   end
 
@@ -59,7 +59,7 @@ defmodule Typle.Inference.Expr do
 
   # -- Pipe operator: left |> right ------------------------------------------
 
-  def infer({:|>, meta, [left, right]}, env) do
+  def infer({:|>, meta, [left, right]} = node, env) do
     {left_type, env} = infer(left, env)
 
     # Rewrite: left |> fun(args) => fun(left, args)
@@ -75,44 +75,44 @@ defmodule Typle.Inference.Expr do
           {left_type, env}
       end
 
-    env = maybe_record(env, meta, type)
+    env = maybe_record(env, meta, type, Macro.to_string(node))
     {type, env}
   end
 
   # -- Remote call: Module.function(args) ------------------------------------
 
-  def infer({{:., meta, [module, function]}, _call_meta, args}, env)
+  def infer({{:., meta, [module, function]}, _call_meta, args} = node, env)
       when is_atom(module) and is_atom(function) do
     {arg_types, env} = infer_args(args, env)
     type = resolve_remote(module, function, length(args), arg_types)
-    env = maybe_record(env, meta, type)
+    env = maybe_record(env, meta, type, Macro.to_string(node))
     {type, env}
   end
 
   # -- Remote call with aliased module: Alias.function(args) -----------------
 
-  def infer({{:., meta, [{:__aliases__, _, parts}, function]}, _call_meta, args}, env)
+  def infer({{:., meta, [{:__aliases__, _, parts}, function]}, _call_meta, args} = node, env)
       when is_atom(function) do
     {arg_types, env} = infer_args(args, env)
     module = Env.resolve_alias(env, parts)
     type = resolve_remote(module, function, length(args), arg_types)
-    env = maybe_record(env, meta, type)
+    env = maybe_record(env, meta, type, Macro.to_string(node))
     {type, env}
   end
 
   # -- Map field access: map.field -------------------------------------------
 
-  def infer({{:., meta, [expr, field]}, _call_meta, []}, env) when is_atom(field) do
+  def infer({{:., meta, [expr, field]}, _call_meta, []} = node, env) when is_atom(field) do
     {_expr_type, env} = infer(expr, env)
     # Without precise map type tracking, we return dynamic
     type = Type.dynamic()
-    env = maybe_record(env, meta, type)
+    env = maybe_record(env, meta, type, Macro.to_string(node))
     {type, env}
   end
 
   # -- Case expression -------------------------------------------------------
 
-  def infer({:case, meta, [subject, [do: clauses]]}, env) do
+  def infer({:case, meta, [subject, [do: clauses]]} = node, env) do
     {subject_type, env} = infer(subject, env)
 
     {branch_types, branch_envs, env} =
@@ -139,7 +139,8 @@ defmodule Typle.Inference.Expr do
         # Collect the innermost scope's bindings for branch merging
         [scope | _] = scoped_env.scopes
 
-        {[body_type | types], [scope | envs], %{acc_env | types: scoped_env.types}}
+        {[body_type | types], [scope | envs],
+         %{acc_env | types: scoped_env.types, exprs: scoped_env.exprs}}
       end)
 
     result_type =
@@ -149,13 +150,13 @@ defmodule Typle.Inference.Expr do
       end
 
     env = Env.merge_branches(env, Enum.reverse(branch_envs))
-    env = maybe_record(env, meta, result_type)
+    env = maybe_record(env, meta, result_type, Macro.to_string(node))
     {result_type, env}
   end
 
   # -- Cond expression -------------------------------------------------------
 
-  def infer({:cond, meta, [[do: clauses]]}, env) do
+  def infer({:cond, meta, [[do: clauses]]} = node, env) do
     {branch_types, env} =
       Enum.reduce(clauses, {[], env}, fn {:->, _m, [[_condition], body]}, {types, acc_env} ->
         {body_type, acc_env} = infer(body, acc_env)
@@ -163,13 +164,13 @@ defmodule Typle.Inference.Expr do
       end)
 
     result_type = Type.union(Enum.reverse(branch_types))
-    env = maybe_record(env, meta, result_type)
+    env = maybe_record(env, meta, result_type, Macro.to_string(node))
     {result_type, env}
   end
 
   # -- If/unless expression --------------------------------------------------
 
-  def infer({if_or_unless, meta, [condition, branches]}, env)
+  def infer({if_or_unless, meta, [condition, branches]} = node, env)
       when if_or_unless in [:if, :unless] do
     {_cond_type, env} = infer(condition, env)
 
@@ -180,13 +181,13 @@ defmodule Typle.Inference.Expr do
     {else_type, env} = if else_branch, do: infer(else_branch, env), else: {Type.atom(nil), env}
 
     result_type = Type.union([do_type, else_type])
-    env = maybe_record(env, meta, result_type)
+    env = maybe_record(env, meta, result_type, Macro.to_string(node))
     {result_type, env}
   end
 
   # -- With expression -------------------------------------------------------
 
-  def infer({:with, meta, clauses_and_body}, env) do
+  def infer({:with, meta, clauses_and_body} = node, env) do
     # The body keywords ([do: ..., else: ...]) are always the last element
     # as a keyword list, not a tuple, so split_with won't find them.
     {clauses, body_kw} =
@@ -211,37 +212,37 @@ defmodule Typle.Inference.Expr do
     do_body = Keyword.get(body_kw, :do)
 
     {result_type, env} = if do_body, do: infer(do_body, env), else: {Type.dynamic(), env}
-    env = maybe_record(env, meta, result_type)
+    env = maybe_record(env, meta, result_type, Macro.to_string(node))
     {result_type, env}
   end
 
   # -- Fn (anonymous function) -----------------------------------------------
 
-  def infer({:fn, meta, _clauses}, env) do
-    env = maybe_record(env, meta, %Type{kind: :function, params: []})
+  def infer({:fn, meta, _clauses} = node, env) do
+    env = maybe_record(env, meta, %Type{kind: :function, params: []}, Macro.to_string(node))
     {%Type{kind: :function, params: []}, env}
   end
 
   # -- Try expression --------------------------------------------------------
 
-  def infer({:try, meta, [blocks]}, env) do
+  def infer({:try, meta, [blocks]} = node, env) do
     do_body = Keyword.get(blocks, :do)
     {do_type, env} = if do_body, do: infer(do_body, env), else: {Type.dynamic(), env}
-    env = maybe_record(env, meta, do_type)
+    env = maybe_record(env, meta, do_type, Macro.to_string(node))
     {do_type, env}
   end
 
   # -- Struct literal: %Mod{...} ---------------------------------------------
 
-  def infer({:%, meta, [_struct, {:%{}, _, _pairs}]}, env) do
+  def infer({:%, meta, [_struct, {:%{}, _, _pairs}]} = node, env) do
     type = Type.map()
-    env = maybe_record(env, meta, type)
+    env = maybe_record(env, meta, type, Macro.to_string(node))
     {type, env}
   end
 
   # -- Map literal: %{...} --------------------------------------------------
 
-  def infer({:%{}, meta, pairs}, env) do
+  def infer({:%{}, meta, pairs} = node, env) do
     env =
       Enum.reduce(pairs, env, fn {_key, val}, acc ->
         {_type, acc} = infer(val, acc)
@@ -249,22 +250,22 @@ defmodule Typle.Inference.Expr do
       end)
 
     type = Type.map()
-    env = maybe_record(env, meta, type)
+    env = maybe_record(env, meta, type, Macro.to_string(node))
     {type, env}
   end
 
   # -- Binary/string interpolation -------------------------------------------
 
-  def infer({:<<>>, meta, _segments}, env) do
+  def infer({:<<>>, meta, _segments} = node, env) do
     type = Type.binary()
-    env = maybe_record(env, meta, type)
+    env = maybe_record(env, meta, type, Macro.to_string(node))
     {type, env}
   end
 
   # -- Local call (unqualified): function(args) ------------------------------
   # Must come AFTER all specialized forms.
 
-  def infer({function, meta, args}, env) when is_atom(function) and is_list(args) do
+  def infer({function, meta, args} = node, env) when is_atom(function) and is_list(args) do
     {arg_types, env} = infer_args(args, env)
     arity = length(args)
 
@@ -280,16 +281,16 @@ defmodule Typle.Inference.Expr do
           builtin_type
       end
 
-    env = maybe_record(env, meta, type)
+    env = maybe_record(env, meta, type, Macro.to_string(node))
     {type, env}
   end
 
   # -- Tuple literal: {a, b} or {a, b, c, ...} ------------------------------
 
-  def infer({:{}, meta, elements}, env) do
+  def infer({:{}, meta, elements} = node, env) do
     {elem_types, env} = infer_args(elements, env)
     type = Type.tuple(elem_types)
-    env = maybe_record(env, meta, type)
+    env = maybe_record(env, meta, type, Macro.to_string(node))
     {type, env}
   end
 
@@ -330,20 +331,20 @@ defmodule Typle.Inference.Expr do
     end
   end
 
-  defp maybe_record(env, meta, type) do
+  defp maybe_record(env, meta, type, expr) do
     line = Keyword.get(meta, :line, 0)
     col = Keyword.get(meta, :column, 0)
 
     if line > 0 do
-      Env.record_type(env, line, col, type)
+      Env.record_type(env, line, col, type, expr)
     else
       env
     end
   end
 
   defp merge_positions(env, positions) do
-    Enum.reduce(positions, env, fn {{line, col}, type}, acc ->
-      Env.record_type(acc, line, col, type)
+    Enum.reduce(positions, env, fn {{line, col}, {type, expr}}, acc ->
+      Env.record_type(acc, line, col, type, expr)
     end)
   end
 end

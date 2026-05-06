@@ -207,7 +207,7 @@ defmodule Typle.Inference.PatternTest do
     test "records variable positions in pattern" do
       ast = {:x, [line: 5, column: 3], nil}
       {_bindings, positions} = Pattern.infer(ast, Type.integer())
-      assert %{{5, 3} => %Type{kind: :integer}} = positions
+      assert %{{5, 3} => {%Type{kind: :integer}, "x"}} = positions
     end
 
     test "records multiple variable positions in tuple pattern" do
@@ -216,8 +216,8 @@ defmodule Typle.Inference.PatternTest do
       ast = {left, right}
       tuple_type = Type.tuple([Type.integer(), Type.binary()])
       {_bindings, positions} = Pattern.infer(ast, tuple_type)
-      assert %{{10, 2} => %Type{kind: :integer}} = positions
-      assert %{{10, 5} => %Type{kind: :binary}} = positions
+      assert %{{10, 2} => {%Type{kind: :integer}, "a"}} = positions
+      assert %{{10, 5} => {%Type{kind: :binary}, "b"}} = positions
     end
 
     test "does not record positions without line metadata" do

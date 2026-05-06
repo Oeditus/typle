@@ -29,10 +29,20 @@ defmodule TypleTest do
   end
 
   describe "types_for_file/1" do
-    test "infers types for a source file" do
+    test "infers types with expressions for a source file (default expr: true)" do
       assert {:ok, type_map} = Typle.types_for_file(@fixture_path)
       assert is_map(type_map)
       assert map_size(type_map) > 0
+
+      # Values should be %{type: ..., expr: ...} maps
+      [{_pos, entry} | _] = Enum.to_list(type_map)
+      assert %{type: %Type{}, expr: _} = entry
+    end
+
+    test "returns bare types when expr: false" do
+      assert {:ok, type_map} = Typle.types_for_file(@fixture_path, expr: false)
+      [{_pos, value} | _] = Enum.to_list(type_map)
+      assert %Type{} = value
     end
 
     test "returns error for non-existent file" do
@@ -45,13 +55,20 @@ defmodule TypleTest do
       assert {:error, :no_type_at_position} = Typle.type_at(@fixture_path, 1, 1)
     end
 
-    test "returns integer for pattern variable num at line 16, col 8" do
-      assert {:ok, type} = Typle.type_at(@fixture_path, 16, 8)
+    test "returns type and expr for pattern variable num at line 16, col 8" do
+      assert {:ok, %{type: type, expr: expr}} = Typle.type_at(@fixture_path, 16, 8)
       assert type.kind == :integer
+      assert expr == "num"
     end
 
-    test "returns integer for body variable num at line 16, col 29" do
-      assert {:ok, type} = Typle.type_at(@fixture_path, 16, 29)
+    test "returns type and expr for body variable num at line 16, col 29" do
+      assert {:ok, %{type: type, expr: expr}} = Typle.type_at(@fixture_path, 16, 29)
+      assert type.kind == :integer
+      assert expr == "num"
+    end
+
+    test "returns bare type when expr: false" do
+      assert {:ok, type} = Typle.type_at(@fixture_path, 16, 8, expr: false)
       assert type.kind == :integer
     end
   end

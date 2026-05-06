@@ -13,19 +13,21 @@ defmodule Typle.Inference do
   alias Typle.Type
 
   @type type_map :: %{{non_neg_integer(), non_neg_integer()} => Type.t()}
+  @type expr_map :: %{{non_neg_integer(), non_neg_integer()} => String.t()}
+  @type inference_result :: %{types: type_map(), exprs: expr_map()}
 
   @doc """
   Infers types for all expressions in the given source file.
 
-  Returns a map of `{line, col} => type` for each expression node
-  that has position metadata.
+  Returns `{:ok, %{types: type_map, exprs: expr_map}}` where `type_map` maps
+  `{line, col}` to types and `expr_map` maps positions to source expression strings.
 
   ## Options
 
     * `:unstable` - when `true`, uses the compiler-replay engine
       from `Typle.Unstable` for deeper inference (default: `false`)
   """
-  @spec infer_file(String.t(), keyword()) :: {:ok, type_map()} | {:error, term()}
+  @spec infer_file(String.t(), keyword()) :: {:ok, inference_result()} | {:error, term()}
   def infer_file(file_path, opts \\ []) do
     if opts[:unstable] do
       Typle.Unstable.types_for_file(file_path)
@@ -34,7 +36,7 @@ defmodule Typle.Inference do
         module = extract_module_name(ast)
         env = Env.new(module: module, file: file_path)
         {_type, env} = walk_top_level(ast, env)
-        {:ok, Env.all_types(env)}
+        {:ok, %{types: Env.all_types(env), exprs: Env.all_exprs(env)}}
       end
     end
   end
@@ -50,7 +52,7 @@ defmodule Typle.Inference do
     * `:unstable` - when `true`, uses the compiler-replay engine
       from `Typle.Unstable` for deeper inference (default: `false`)
   """
-  @spec infer_module(module(), keyword()) :: {:ok, type_map()} | {:error, term()}
+  @spec infer_module(module(), keyword()) :: {:ok, inference_result()} | {:error, term()}
   def infer_module(module, opts \\ []) do
     if opts[:unstable] do
       Typle.Unstable.types_for(module)
@@ -170,8 +172,8 @@ defmodule Typle.Inference do
   defp walk_definition(_, env), do: {Type.dynamic(), env}
 
   defp merge_positions(env, positions) do
-    Enum.reduce(positions, env, fn {{line, col}, type}, acc ->
-      Env.record_type(acc, line, col, type)
+    Enum.reduce(positions, env, fn {{line, col}, {type, expr}}, acc ->
+      Env.record_type(acc, line, col, type, expr)
     end)
   end
 end

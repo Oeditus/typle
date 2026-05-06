@@ -41,17 +41,11 @@ defmodule Mix.Tasks.Typle do
   defp query(location, format, unstable?) do
     case parse_location(location) do
       {:ok, file, line, col} ->
-        result =
-          if unstable? do
-            Typle.Unstable.type_at(file, line, col)
-          else
-            Typle.type_at(file, line, col)
-          end
-
+        result = Typle.type_at(file, line, col, unstable: unstable?)
         output_result(result, file, line, col, format)
 
       {:ok, file, line} ->
-        result = query_line_types(file, unstable?)
+        result = Typle.types_for_file(file, unstable: unstable?)
         output_line_results(result, line, format)
 
       :error ->
@@ -80,16 +74,18 @@ defmodule Mix.Tasks.Typle do
     end
   end
 
-  defp output_result({:ok, type}, file, line, col, "text") do
-    Mix.shell().info("#{file}:#{line}:#{col} :: #{Typle.Type.to_string(type)}")
+  defp output_result({:ok, %{type: type, expr: expr}}, file, line, col, "text") do
+    expr_suffix = if expr, do: "  (#{expr})", else: ""
+    Mix.shell().info("#{file}:#{line}:#{col} :: #{Typle.Type.to_string(type)}#{expr_suffix}")
   end
 
-  defp output_result({:ok, type}, file, line, col, "json") do
+  defp output_result({:ok, %{type: type, expr: expr}}, file, line, col, "json") do
     data = %{
       file: file,
       line: line,
       column: col,
-      type: Typle.Type.to_string(type)
+      type: Typle.Type.to_string(type),
+      expr: expr
     }
 
     Mix.shell().info(:json.encode(data) |> IO.iodata_to_binary())
@@ -101,20 +97,21 @@ defmodule Mix.Tasks.Typle do
 
   defp output_line_results({:ok, type_map}, line, "text") do
     type_map
-    |> Enum.filter(fn {{l, _c}, _type} -> l == line end)
-    |> Enum.sort_by(fn {{_l, c}, _type} -> c end)
-    |> Enum.each(fn {{_l, col}, type} ->
-      Mix.shell().info("  col #{col}: #{Typle.Type.to_string(type)}")
+    |> Enum.filter(fn {{l, _c}, _v} -> l == line end)
+    |> Enum.sort_by(fn {{_l, c}, _v} -> c end)
+    |> Enum.each(fn {{_l, col}, %{type: type, expr: expr}} ->
+      expr_suffix = if expr, do: "  (#{expr})", else: ""
+      Mix.shell().info("  col #{col}: #{Typle.Type.to_string(type)}#{expr_suffix}")
     end)
   end
 
   defp output_line_results({:ok, type_map}, line, "json") do
     entries =
       type_map
-      |> Enum.filter(fn {{l, _c}, _type} -> l == line end)
-      |> Enum.sort_by(fn {{_l, c}, _type} -> c end)
-      |> Enum.map(fn {{_l, col}, type} ->
-        %{column: col, type: Typle.Type.to_string(type)}
+      |> Enum.filter(fn {{l, _c}, _v} -> l == line end)
+      |> Enum.sort_by(fn {{_l, c}, _v} -> c end)
+      |> Enum.map(fn {{_l, col}, %{type: type, expr: expr}} ->
+        %{column: col, type: Typle.Type.to_string(type), expr: expr}
       end)
 
     Mix.shell().info(:json.encode(%{line: line, entries: entries}) |> IO.iodata_to_binary())
@@ -122,24 +119,5 @@ defmodule Mix.Tasks.Typle do
 
   defp output_line_results({:error, reason}, _line, _format) do
     Mix.shell().error("Error: #{inspect(reason)}")
-  end
-
-  defp query_line_types(file, true) do
-    case Typle.Unstable.types_for(find_module(file)) do
-      {:ok, _} = ok -> ok
-      _ -> Typle.types_for_file(file)
-    end
-  end
-
-  defp query_line_types(file, false), do: Typle.types_for_file(file)
-
-  defp find_module(file) do
-    # Best-effort: derive module name from file path
-    file
-    |> Path.rootname()
-    |> String.replace(~r{^lib/}, "")
-    |> String.split("/")
-    |> Enum.map(&Macro.camelize/1)
-    |> Module.concat()
   end
 end

@@ -30,7 +30,7 @@ defmodule Typle do
   see `Typle.Unstable`.
   """
 
-  alias Typle.{Beam, Inference, SignatureStore, Type, Unstable}
+  alias Typle.{Beam, ExprMap, Inference, SignatureStore, Type, Unstable}
 
   @doc """
   Returns the inferred type at the given file position.
@@ -41,16 +41,37 @@ defmodule Typle do
 
     * `:unstable` - when `true`, uses the compiler-replay engine
       from `Typle.Unstable` for deeper inference (default: `false`)
+    * `:expr` - when `true` (default), returns a map with both the
+      type and the source expression string:
+      `{:ok, %{type: Type.t(), expr: String.t() | nil}}`.
+      When `false`, returns `{:ok, Type.t()}` (legacy behaviour).
   """
   @spec type_at(String.t(), non_neg_integer(), non_neg_integer(), keyword()) ::
-          {:ok, Type.t()} | {:error, term()}
+          {:ok, Type.t() | %{type: Type.t(), expr: String.t() | nil}} | {:error, term()}
   def type_at(file, line, col, opts \\ []) do
+    expr? = Keyword.get(opts, :expr, true)
+
     if opts[:unstable] do
-      Unstable.type_at(file, line, col)
+      case Unstable.type_at(file, line, col) do
+        {:ok, type} when expr? ->
+          {:ok, %{type: type, expr: ExprMap.expr_at(file, line, col)}}
+
+        other ->
+          other
+      end
     else
-      with {:ok, type_map} <- Inference.infer_file(file),
-           :error <- Map.fetch(type_map, {line, col}),
-           do: {:error, :no_type_at_position}
+      with {:ok, %{types: types, exprs: exprs}} <- Inference.infer_file(file) do
+        case Map.fetch(types, {line, col}) do
+          {:ok, type} when expr? ->
+            {:ok, %{type: type, expr: Map.get(exprs, {line, col})}}
+
+          {:ok, type} ->
+            {:ok, type}
+
+          :error ->
+            {:error, :no_type_at_position}
+        end
+      end
     end
   end
 
@@ -64,14 +85,21 @@ defmodule Typle do
 
     * `:unstable` - when `true`, uses the compiler-replay engine
       from `Typle.Unstable` for deeper inference (default: `false`)
+    * `:expr` - when `true` (default), each value in the map becomes
+      `%{type: Type.t(), expr: String.t() | nil}` instead of bare `Type.t()`.
   """
-  @spec types_for(module(), keyword()) :: {:ok, Inference.type_map()} | {:error, term()}
+  @spec types_for(module(), keyword()) :: {:ok, map()} | {:error, term()}
   def types_for(module, opts \\ []) do
-    if opts[:unstable] do
-      Unstable.types_for(module)
-    else
-      Inference.infer_module(module)
-    end
+    expr? = Keyword.get(opts, :expr, true)
+
+    result =
+      if opts[:unstable] do
+        Unstable.types_for(module)
+      else
+        Inference.infer_module(module)
+      end
+
+    format_map_result(result, expr?, fn -> source_for_module(module) end)
   end
 
   @doc """
@@ -81,14 +109,21 @@ defmodule Typle do
 
     * `:unstable` - when `true`, uses the compiler-replay engine
       from `Typle.Unstable` for deeper inference (default: `false`)
+    * `:expr` - when `true` (default), each value in the map becomes
+      `%{type: Type.t(), expr: String.t() | nil}` instead of bare `Type.t()`.
   """
-  @spec types_for_file(String.t(), keyword()) :: {:ok, Inference.type_map()} | {:error, term()}
+  @spec types_for_file(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def types_for_file(file, opts \\ []) do
-    if opts[:unstable] do
-      Unstable.types_for_file(file)
-    else
-      Inference.infer_file(file)
-    end
+    expr? = Keyword.get(opts, :expr, true)
+
+    result =
+      if opts[:unstable] do
+        Unstable.types_for_file(file)
+      else
+        Inference.infer_file(file)
+      end
+
+    format_map_result(result, expr?, fn -> file end)
   end
 
   @doc """
@@ -124,4 +159,56 @@ defmodule Typle do
     _ = opts
     SignatureStore.return_type(module, function, arity, [])
   end
+
+  # -- Private helpers -------------------------------------------------------
+
+  # Formats an inference result for the map-returning public functions.
+  # When the result already carries both maps (stable path), uses the
+  # built-in expr_map. For the unstable path (bare type_map), falls back
+  # to post-hoc extraction via ExprMap.
+  defp format_map_result({:ok, %{types: types, exprs: exprs}}, true, _file_fn) do
+    merged =
+      Map.new(types, fn {pos, type} ->
+        {pos, %{type: type, expr: Map.get(exprs, pos)}}
+      end)
+
+    {:ok, merged}
+  end
+
+  defp format_map_result({:ok, %{types: types}}, false, _file_fn) do
+    {:ok, types}
+  end
+
+  # Unstable path returns a bare type_map (no %{types: ..., exprs: ...})
+  defp format_map_result({:ok, type_map}, true, file_fn) when is_map(type_map) do
+    file = file_fn.()
+    fallback_exprs = if file, do: ExprMap.extract(file) |> unwrap_expr_map(), else: %{}
+
+    merged =
+      Map.new(type_map, fn {pos, type} ->
+        {pos, %{type: type, expr: Map.get(fallback_exprs, pos)}}
+      end)
+
+    {:ok, merged}
+  end
+
+  defp format_map_result({:ok, type_map}, false, _file_fn) when is_map(type_map) do
+    {:ok, type_map}
+  end
+
+  defp format_map_result(error, _expr?, _file_fn), do: error
+
+  defp source_for_module(module) do
+    try do
+      case module.module_info(:compile)[:source] do
+        nil -> nil
+        source -> List.to_string(source)
+      end
+    rescue
+      _ -> nil
+    end
+  end
+
+  defp unwrap_expr_map({:ok, map}), do: map
+  defp unwrap_expr_map(_), do: %{}
 end

@@ -14,7 +14,7 @@ defmodule Typle.Inference.Pattern do
   alias Typle.Type
 
   @type bindings :: %{atom() => Type.t()}
-  @type positions :: %{{non_neg_integer(), non_neg_integer()} => Type.t()}
+  @type positions :: %{{non_neg_integer(), non_neg_integer()} => {Type.t(), String.t() | nil}}
 
   @doc """
   Infers variable types from a pattern, given the type of the matched expression.
@@ -33,7 +33,7 @@ defmodule Typle.Inference.Pattern do
   # Variable binding: x = <matched_type>
   defp do_infer({var_name, meta, ctx}, matched_type, {bindings, positions})
        when is_atom(var_name) and is_atom(ctx) and var_name != :_ do
-    positions = record_position(positions, meta, matched_type)
+    positions = record_position(positions, meta, matched_type, Atom.to_string(var_name))
     {Map.put(bindings, var_name, matched_type), positions}
   end
 
@@ -289,12 +289,12 @@ defmodule Typle.Inference.Pattern do
 
   # -- Position recording -----------------------------------------------------
 
-  defp record_position(positions, meta, type) do
+  defp record_position(positions, meta, type, expr) do
     line = Keyword.get(meta, :line, 0)
     col = Keyword.get(meta, :column, 0)
 
     if line > 0 do
-      Map.put(positions, {line, col}, type)
+      Map.put(positions, {line, col}, {type, expr})
     else
       positions
     end

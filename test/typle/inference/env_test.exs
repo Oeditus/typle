@@ -70,6 +70,17 @@ defmodule Typle.Inference.EnvTest do
       assert %Type{kind: :integer} = Env.type_at(env, 10, 5)
     end
 
+    test "records expression string alongside type" do
+      env = Env.new() |> Env.record_type(10, 5, Type.integer(), "x")
+      assert %Type{kind: :integer} = Env.type_at(env, 10, 5)
+      assert %{{10, 5} => "x"} = Env.all_exprs(env)
+    end
+
+    test "does not record expr when nil" do
+      env = Env.new() |> Env.record_type(10, 5, Type.integer())
+      assert Env.all_exprs(env) == %{}
+    end
+
     test "returns nil for unrecorded positions" do
       env = Env.new()
       assert nil == Env.type_at(env, 1, 1)

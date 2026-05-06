@@ -12,6 +12,7 @@ defmodule Typle.Inference.Env do
   @type t :: %__MODULE__{
           scopes: [%{atom() => Type.t()}],
           types: %{position() => Type.t()},
+          exprs: %{position() => String.t()},
           module: module() | nil,
           file: String.t() | nil,
           aliases: %{atom() => module()}
@@ -19,7 +20,7 @@ defmodule Typle.Inference.Env do
 
   @type position :: {non_neg_integer(), non_neg_integer()}
 
-  defstruct scopes: [%{}], types: %{}, module: nil, file: nil, aliases: %{}
+  defstruct scopes: [%{}], types: %{}, exprs: %{}, module: nil, file: nil, aliases: %{}
 
   @doc "Creates a new empty environment."
   @spec new(keyword()) :: t()
@@ -64,10 +65,16 @@ defmodule Typle.Inference.Env do
 
   def pop_scope(env), do: env
 
-  @doc "Records the inferred type for an expression at the given position."
-  @spec record_type(t(), non_neg_integer(), non_neg_integer(), Type.t()) :: t()
-  def record_type(%__MODULE__{types: types} = env, line, col, type) do
-    %{env | types: Map.put(types, {line, col}, type)}
+  @doc "Records the inferred type (and optionally the source expression) at the given position."
+  @spec record_type(t(), non_neg_integer(), non_neg_integer(), Type.t(), String.t() | nil) :: t()
+  def record_type(%__MODULE__{types: types, exprs: exprs} = env, line, col, type, expr \\ nil) do
+    env = %{env | types: Map.put(types, {line, col}, type)}
+
+    if expr do
+      %{env | exprs: Map.put(exprs, {line, col}, expr)}
+    else
+      env
+    end
   end
 
   @doc "Returns the type recorded at the given position, or nil."
@@ -79,6 +86,10 @@ defmodule Typle.Inference.Env do
   @doc "Returns all recorded types as a map of `{line, col} => type`."
   @spec all_types(t()) :: %{position() => Type.t()}
   def all_types(%__MODULE__{types: types}), do: types
+
+  @doc "Returns all recorded expressions as a map of `{line, col} => expr_string`."
+  @spec all_exprs(t()) :: %{position() => String.t()}
+  def all_exprs(%__MODULE__{exprs: exprs}), do: exprs
 
   @doc "Stores an alias mapping (e.g. `Beam` -> `Typle.Beam`)."
   @spec put_alias(t(), atom(), module()) :: t()

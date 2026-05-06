@@ -41,19 +41,9 @@ defmodule Mix.Tasks.Typle.Dump do
   defp dump(target, format, unstable?) do
     result =
       if String.ends_with?(target, ".ex") or String.ends_with?(target, ".exs") do
-        if unstable? do
-          Typle.Unstable.types_for(find_module(target))
-        else
-          Typle.types_for_file(target)
-        end
+        Typle.types_for_file(target, unstable: unstable?)
       else
-        module = Module.concat([target])
-
-        if unstable? do
-          Typle.Unstable.types_for(module)
-        else
-          Typle.types_for(module)
-        end
+        Typle.types_for(Module.concat([target]), unstable: unstable?)
       end
 
     case result do
@@ -70,8 +60,9 @@ defmodule Mix.Tasks.Typle.Dump do
     |> Enum.each(fn {line, entries} ->
       entries
       |> Enum.sort_by(fn {{_, col}, _} -> col end)
-      |> Enum.each(fn {{_, col}, type} ->
-        Mix.shell().info("  #{line}:#{col}  #{Typle.Type.to_string(type)}")
+      |> Enum.each(fn {{_, col}, %{type: type, expr: expr}} ->
+        expr_suffix = if expr, do: "  (#{expr})", else: ""
+        Mix.shell().info("  #{line}:#{col}  #{Typle.Type.to_string(type)}#{expr_suffix}")
       end)
     end)
   end
@@ -80,19 +71,10 @@ defmodule Mix.Tasks.Typle.Dump do
     entries =
       type_map
       |> Enum.sort_by(fn {{line, col}, _} -> {line, col} end)
-      |> Enum.map(fn {{line, col}, type} ->
-        %{line: line, column: col, type: Typle.Type.to_string(type)}
+      |> Enum.map(fn {{line, col}, %{type: type, expr: expr}} ->
+        %{line: line, column: col, type: Typle.Type.to_string(type), expr: expr}
       end)
 
     Mix.shell().info(:json.encode(%{types: entries}) |> IO.iodata_to_binary())
-  end
-
-  defp find_module(file) do
-    file
-    |> Path.rootname()
-    |> String.replace(~r{^lib/}, "")
-    |> String.split("/")
-    |> Enum.map(&Macro.camelize/1)
-    |> Module.concat()
   end
 end
