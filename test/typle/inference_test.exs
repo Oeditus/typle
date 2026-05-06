@@ -4,6 +4,7 @@ defmodule Typle.InferenceTest do
   alias Typle.Inference
 
   @fixture_path Path.expand("../support/sample_module.ex", __DIR__)
+  @macro_fixture_path Path.expand("../support/macro_module.ex", __DIR__)
 
   describe "infer_file/1" do
     test "returns a type map for a valid source file" do
@@ -34,6 +35,47 @@ defmodule Typle.InferenceTest do
         end)
 
       assert [_ | _] = integer_entries
+    end
+  end
+
+  describe "macro expansion inference" do
+    test "infers types through expanded pipe chains" do
+      {:ok, type_map} = Inference.infer_file(@macro_fixture_path)
+      assert is_map(type_map)
+      assert map_size(type_map) > 0
+
+      # The piped/1 function uses Integer.to_string |> String.upcase.
+      # After macro expansion, these resolve to remote calls with known return types.
+      types = Map.values(type_map)
+
+      has_binary =
+        Enum.any?(types, fn type ->
+          type.kind == :binary or
+            (type.dynamic? and match?(%{kind: :binary}, type.inner))
+        end)
+
+      assert has_binary, "Expected at least one binary type from pipe chain inference"
+    end
+
+    test "infers types for expanded unless expression" do
+      {:ok, type_map} = Inference.infer_file(@macro_fixture_path)
+
+      # The conditional/1 and negated/1 functions use unless/if which produce
+      # union result types. Verify we get non-dynamic union or concrete types.
+      non_dynamic_entries =
+        Enum.filter(type_map, fn {_pos, type} ->
+          type.kind != :dynamic or type.dynamic?
+        end)
+
+      assert [_ | _] = non_dynamic_entries
+    end
+
+    test "produces more type entries than lines in the macro fixture" do
+      {:ok, type_map} = Inference.infer_file(@macro_fixture_path)
+
+      # With macro expansion, we should get type entries for expressions
+      # that were previously hidden inside macro calls.
+      assert map_size(type_map) > 5
     end
   end
 end

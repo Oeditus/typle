@@ -13,12 +13,13 @@ defmodule Typle.Inference.Env do
           scopes: [%{atom() => Type.t()}],
           types: %{position() => Type.t()},
           module: module() | nil,
-          file: String.t() | nil
+          file: String.t() | nil,
+          aliases: %{atom() => module()}
         }
 
   @type position :: {non_neg_integer(), non_neg_integer()}
 
-  defstruct scopes: [%{}], types: %{}, module: nil, file: nil
+  defstruct scopes: [%{}], types: %{}, module: nil, file: nil, aliases: %{}
 
   @doc "Creates a new empty environment."
   @spec new(keyword()) :: t()
@@ -78,6 +79,23 @@ defmodule Typle.Inference.Env do
   @doc "Returns all recorded types as a map of `{line, col} => type`."
   @spec all_types(t()) :: %{position() => Type.t()}
   def all_types(%__MODULE__{types: types}), do: types
+
+  @doc "Stores an alias mapping (e.g. `Beam` -> `Typle.Beam`)."
+  @spec put_alias(t(), atom(), module()) :: t()
+  def put_alias(%__MODULE__{aliases: aliases} = env, short, full) do
+    %{env | aliases: Map.put(aliases, short, full)}
+  end
+
+  @doc "Resolves `{:__aliases__}` parts through the alias map."
+  @spec resolve_alias(t(), [atom()]) :: module()
+  def resolve_alias(%__MODULE__{aliases: aliases}, [first | rest]) do
+    case Map.get(aliases, first) do
+      nil -> Module.concat([first | rest])
+      resolved -> Module.concat([resolved | rest])
+    end
+  end
+
+  def resolve_alias(_env, parts), do: Module.concat(parts)
 
   @doc """
   Merges variable bindings from multiple branches (e.g. case clauses).

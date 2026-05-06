@@ -58,6 +58,17 @@ The engine handles: literals, variables, match operators, pipes, remote/local
 calls, `case`/`cond`/`if`/`with`/`try`/`fn` expressions, tuples, lists, maps,
 structs, and binary constructions.
 
+### Layer 3.5: Macro Expansion (`Typle.Inference.Expander`)
+
+Before walking the AST, function bodies are expanded via
+[ExPanda](https://hexdocs.pm/ex_panda) to resolve all macros to their
+underlying forms. This means pipe chains (`|>`), `unless`, `use` directives,
+library DSLs, and custom macros are expanded before inference, giving the
+engine visibility into the actual control flow and data flow. Expansion
+failures are handled gracefully -- if a macro cannot be expanded (e.g. the
+defining module is not loaded), the original AST is preserved and the
+inference engine applies its existing best-effort handling.
+
 ### Layer 4: Unstable Compiler Replay (`Typle.Unstable`)
 
 An opt-in layer that hooks into the compiler via compilation tracers for
@@ -71,7 +82,7 @@ Add `typle` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:typle, "~> 0.1.0"}
+    {:typle, "~> 0.1"}
   ]
 end
 ```
@@ -180,7 +191,6 @@ than guessing wrong.
 
 - [ ] Type annotations / signatures (Elixir does not yet have user-facing type syntax)
 - [ ] Protocol dispatch type tracking
-- [ ] Macro expansion type tracking
 - [ ] Cross-module dataflow analysis beyond function signatures
 
 ## License

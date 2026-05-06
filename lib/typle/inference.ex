@@ -2,12 +2,14 @@ defmodule Typle.Inference do
   @moduledoc """
   Orchestrates type inference for a module or file.
 
-  Parses the source file, walks each function definition through the
-  expression inference engine, and collects a map of
-  `{line, col} => Typle.Type.t()` for every expression in the module.
+  Parses the source file, expands macros in function bodies via
+  `Typle.Inference.Expander` (powered by ExPanda), then walks each
+  function definition through the expression inference engine.
+  Collects a map of `{line, col} => Typle.Type.t()` for every
+  expression in the module.
   """
 
-  alias Typle.Inference.{Env, Expr, Guard, Pattern}
+  alias Typle.Inference.{Env, Expander, Expr, Guard, Pattern}
   alias Typle.Type
 
   @type type_map :: %{{non_neg_integer(), non_neg_integer()} => Type.t()}
@@ -20,8 +22,7 @@ defmodule Typle.Inference do
   """
   @spec infer_file(String.t()) :: {:ok, type_map()} | {:error, term()}
   def infer_file(file_path) do
-    with {:ok, source} <- File.read(file_path),
-         {:ok, ast} <- parse_with_metadata(source, file_path) do
+    with {:ok, ast} <- Expander.expand_file(file_path) do
       module = extract_module_name(ast)
       env = Env.new(module: module, file: file_path)
       {_type, env} = walk_top_level(ast, env)
@@ -46,15 +47,6 @@ defmodule Typle.Inference do
   end
 
   # -- Private ---------------------------------------------------------------
-
-  defp parse_with_metadata(source, file) do
-    Code.string_to_quoted(source,
-      file: file,
-      columns: true,
-      token_metadata: true,
-      unescape: false
-    )
-  end
 
   defp extract_module_name({:defmodule, _, [{:__aliases__, _, parts} | _]}) do
     Module.concat(parts)
@@ -82,6 +74,38 @@ defmodule Typle.Inference do
   defp walk_top_level({kind, _meta, [_head | _rest]} = def_ast, env)
        when kind in [:def, :defp] do
     walk_definition(def_ast, env)
+  end
+
+  # Simple alias: alias Typle.Beam
+  defp walk_top_level({:alias, _meta, [{:__aliases__, _, parts}]}, env)
+       when length(parts) > 1 do
+    short = List.last(parts)
+    full = Module.concat(parts)
+    {Type.dynamic(), Env.put_alias(env, short, full)}
+  end
+
+  # Alias with :as -- alias Typle.Beam, as: B
+  defp walk_top_level(
+         {:alias, _meta, [{:__aliases__, _, parts}, [as: {:__aliases__, _, [short]}]]},
+         env
+       ) do
+    full = Module.concat(parts)
+    {Type.dynamic(), Env.put_alias(env, short, full)}
+  end
+
+  # Multi-alias: alias Typle.{Beam, Inference}
+  defp walk_top_level(
+         {:alias, _meta, [{{:., _, [{:__aliases__, _, prefix}, :{}]}, _, suffixes}]},
+         env
+       ) do
+    env =
+      Enum.reduce(suffixes, env, fn {:__aliases__, _, suffix_parts}, acc ->
+        short = List.last(suffix_parts)
+        full = Module.concat(prefix ++ suffix_parts)
+        Env.put_alias(acc, short, full)
+      end)
+
+    {Type.dynamic(), env}
   end
 
   defp walk_top_level(_other, env), do: {Type.dynamic(), env}

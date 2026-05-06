@@ -36,7 +36,7 @@ defmodule Typle.Inference.Builtins do
   # -- Kernel boolean operators ----------------------------------------------
 
   def return_type(Kernel, op, 2, _args) when op in [:and, :or] do
-    Type.dynamic()
+    nil
   end
 
   def return_type(Kernel, :not, 1, _args), do: Type.dynamic(Type.boolean())
@@ -77,10 +77,10 @@ defmodule Typle.Inference.Builtins do
   def return_type(Kernel, :length, 1, _args), do: Type.dynamic(Type.integer())
   def return_type(Kernel, :map_size, 1, _args), do: Type.dynamic(Type.integer())
   def return_type(Kernel, :tuple_size, 1, _args), do: Type.dynamic(Type.integer())
-  def return_type(Kernel, :hd, 1, _args), do: Type.dynamic()
+  def return_type(Kernel, :hd, 1, _args), do: nil
   def return_type(Kernel, :tl, 1, _args), do: Type.dynamic(Type.list())
-  def return_type(Kernel, :elem, 2, _args), do: Type.dynamic()
-  def return_type(Kernel, :put_elem, 3, _args), do: Type.dynamic()
+  def return_type(Kernel, :elem, 2, _args), do: nil
+  def return_type(Kernel, :put_elem, 3, _args), do: nil
 
   # -- Integer ---------------------------------------------------------------
 
@@ -123,24 +123,24 @@ defmodule Typle.Inference.Builtins do
   def return_type(Enum, :map, 2, _args), do: Type.dynamic(Type.list())
   def return_type(Enum, :filter, 2, _args), do: Type.dynamic(Type.list())
   def return_type(Enum, :reject, 2, _args), do: Type.dynamic(Type.list())
-  def return_type(Enum, :reduce, 2, _args), do: Type.dynamic()
-  def return_type(Enum, :reduce, 3, _args), do: Type.dynamic()
-  def return_type(Enum, :find, 2, _args), do: Type.dynamic()
-  def return_type(Enum, :find, 3, _args), do: Type.dynamic()
+  def return_type(Enum, :reduce, 2, _args), do: nil
+  def return_type(Enum, :reduce, 3, _args), do: nil
+  def return_type(Enum, :find, 2, _args), do: nil
+  def return_type(Enum, :find, 3, _args), do: nil
   def return_type(Enum, :sort, 1, _args), do: Type.dynamic(Type.list())
   def return_type(Enum, :sort, 2, _args), do: Type.dynamic(Type.list())
   def return_type(Enum, :join, 1, _args), do: Type.dynamic(Type.binary())
   def return_type(Enum, :join, 2, _args), do: Type.dynamic(Type.binary())
-  def return_type(Enum, :into, 2, _args), do: Type.dynamic()
-  def return_type(Enum, :into, 3, _args), do: Type.dynamic()
+  def return_type(Enum, :into, 2, _args), do: nil
+  def return_type(Enum, :into, 3, _args), do: nil
   def return_type(Enum, :each, 2, _args), do: Type.atom(:ok)
 
   # -- Map -------------------------------------------------------------------
 
-  def return_type(Map, :get, 2, _args), do: Type.dynamic()
-  def return_type(Map, :get, 3, _args), do: Type.dynamic()
-  def return_type(Map, :fetch, 2, _args), do: Type.dynamic()
-  def return_type(Map, :fetch!, 2, _args), do: Type.dynamic()
+  def return_type(Map, :get, 2, _args), do: nil
+  def return_type(Map, :get, 3, _args), do: nil
+  def return_type(Map, :fetch, 2, _args), do: nil
+  def return_type(Map, :fetch!, 2, _args), do: nil
   def return_type(Map, :put, 3, _args), do: Type.dynamic(Type.map())
   def return_type(Map, :delete, 2, _args), do: Type.dynamic(Type.map())
   def return_type(Map, :merge, 2, _args), do: Type.dynamic(Type.map())

@@ -6,6 +6,12 @@ defmodule Typle do
   best-effort type inference to answer "what type does the compiler think
   this expression has at line N, column C?"
 
+  Before inference, all macros in function bodies are expanded via
+  [ExPanda](https://hexdocs.pm/ex_panda), so pipe chains, `unless`,
+  `use` directives, and library DSLs are resolved to their underlying
+  forms. When expansion fails, the original AST is preserved and
+  inference falls back to its existing best-effort handling.
+
   ## Usage
 
       # Point query
@@ -34,12 +40,9 @@ defmodule Typle do
   @spec type_at(String.t(), non_neg_integer(), non_neg_integer()) ::
           {:ok, Type.t()} | {:error, term()}
   def type_at(file, line, col) do
-    with {:ok, type_map} <- Inference.infer_file(file) do
-      case Map.get(type_map, {line, col}) do
-        nil -> {:error, :no_type_at_position}
-        type -> {:ok, type}
-      end
-    end
+    with {:ok, type_map} <- Inference.infer_file(file),
+         :error <- Map.fetch(type_map, {line, col}),
+         do: {:error, :no_type_at_position}
   end
 
   @doc """

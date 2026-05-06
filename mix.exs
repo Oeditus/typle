@@ -39,6 +39,7 @@ defmodule Typle.MixProject do
 
   defp deps do
     [
+      {:ex_panda, "~> 0.2"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}
@@ -95,6 +96,7 @@ defmodule Typle.MixProject do
         "Inference Engine": [
           Typle.Inference,
           Typle.Inference.Env,
+          Typle.Inference.Expander,
           Typle.Inference.Expr,
           Typle.Inference.Pattern,
           Typle.Inference.Guard,

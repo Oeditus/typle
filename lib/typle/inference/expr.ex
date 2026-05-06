@@ -82,15 +82,18 @@ defmodule Typle.Inference.Expr do
   def infer({{:., meta, [module, function]}, _call_meta, args}, env)
       when is_atom(module) and is_atom(function) do
     {arg_types, env} = infer_args(args, env)
-    arity = length(args)
+    type = resolve_remote(module, function, length(args), arg_types)
+    env = maybe_record(env, meta, type)
+    {type, env}
+  end
 
-    # Try builtins first, then signature store
-    type =
-      case Builtins.return_type(module, function, arity, arg_types) do
-        nil -> SignatureStore.return_type(module, function, arity, arg_types)
-        builtin_type -> builtin_type
-      end
+  # -- Remote call with aliased module: Alias.function(args) -----------------
 
+  def infer({{:., meta, [{:__aliases__, _, parts}, function]}, _call_meta, args}, env)
+      when is_atom(function) do
+    {arg_types, env} = infer_args(args, env)
+    module = Env.resolve_alias(env, parts)
+    type = resolve_remote(module, function, length(args), arg_types)
     env = maybe_record(env, meta, type)
     {type, env}
   end
@@ -181,7 +184,13 @@ defmodule Typle.Inference.Expr do
   # -- With expression -------------------------------------------------------
 
   def infer({:with, meta, clauses_and_body}, env) do
-    {body_kw, clauses} = Enum.split_with(clauses_and_body, &(is_tuple(&1) and elem(&1, 0) == :do))
+    # The body keywords ([do: ..., else: ...]) are always the last element
+    # as a keyword list, not a tuple, so split_with won't find them.
+    {clauses, body_kw} =
+      case :lists.reverse(clauses_and_body) do
+        [kw | rest] when is_list(kw) -> {:lists.reverse(rest), kw}
+        _ -> {clauses_and_body, []}
+      end
 
     env =
       Enum.reduce(clauses, env, fn
@@ -195,12 +204,7 @@ defmodule Typle.Inference.Expr do
           acc_env
       end)
 
-    do_body =
-      case body_kw do
-        [do: body] -> body
-        [{:do, body} | _] -> body
-        _ -> nil
-      end
+    do_body = Keyword.get(body_kw, :do)
 
     {result_type, env} = if do_body, do: infer(do_body, env), else: {Type.dynamic(), env}
     env = maybe_record(env, meta, result_type)
@@ -313,6 +317,13 @@ defmodule Typle.Inference.Expr do
 
   defp infer_args(args, env) do
     Enum.map_reduce(args, env, fn arg, acc -> infer(arg, acc) end)
+  end
+
+  defp resolve_remote(module, function, arity, arg_types) do
+    case Builtins.return_type(module, function, arity, arg_types) do
+      nil -> SignatureStore.return_type(module, function, arity, arg_types)
+      builtin_type -> builtin_type
+    end
   end
 
   defp maybe_record(env, meta, type) do
