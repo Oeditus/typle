@@ -107,15 +107,12 @@ defmodule Typle.Beam do
   end
 
   defp read_exck_chunk(beam) do
-    case :beam_lib.all_chunks(beam) do
-      {:ok, _mod, chunks} ->
-        case Enum.find(chunks, fn {name, _} -> IO.chardata_to_string(name) == "ExCk" end) do
-          {_, data} -> {:ok, data}
-          nil -> {:error, :no_exck_chunk}
-        end
-
-      {:error, _, reason} ->
-        {:error, reason}
+    with {:ok, _mod, chunks} <- :beam_lib.all_chunks(beam),
+         {_, data} <- Enum.find(chunks, fn {name, _} -> IO.chardata_to_string(name) == "ExCk" end) do
+      {:ok, data}
+    else
+      {:error, _, reason} -> {:error, reason}
+      nil -> {:error, :no_exck_chunk}
     end
   end
 

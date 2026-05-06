@@ -8,8 +8,7 @@ defmodule TypleTest do
   describe "signatures/1" do
     test "reads signatures from a stdlib module" do
       assert {:ok, sigs} = Typle.signatures(Integer)
-      assert is_list(sigs)
-      assert length(sigs) > 0
+      assert [_ | _] = sigs
     end
 
     test "returns error for unknown module" do

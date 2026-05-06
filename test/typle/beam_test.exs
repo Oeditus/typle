@@ -6,8 +6,7 @@ defmodule Typle.BeamTest do
   describe "read_signatures/1" do
     test "reads signatures from Integer module" do
       assert {:ok, sigs} = Beam.read_signatures(Integer)
-      assert is_list(sigs)
-      assert length(sigs) > 0
+      assert [_ | _] = sigs
 
       sig = Enum.find(sigs, &(&1.fun == :to_string and &1.arity == 1))
       assert sig != nil

@@ -7,8 +7,8 @@ defmodule Typle.Inference do
   `{line, col} => Typle.Type.t()` for every expression in the module.
   """
 
+  alias Typle.Inference.{Env, Expr, Guard, Pattern}
   alias Typle.Type
-  alias Typle.Inference.{Env, Expr, Pattern, Guard}
 
   @type type_map :: %{{non_neg_integer(), non_neg_integer()} => Type.t()}
 

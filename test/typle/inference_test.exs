@@ -2,7 +2,6 @@ defmodule Typle.InferenceTest do
   use ExUnit.Case
 
   alias Typle.Inference
-  alias Typle.Type
 
   @fixture_path Path.expand("../support/sample_module.ex", __DIR__)
 
@@ -22,7 +21,7 @@ defmodule Typle.InferenceTest do
 
       # The file has expressions starting at line 6+, so we should have entries
       lines = type_map |> Map.keys() |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
-      assert length(lines) > 0
+      assert [_ | _] = lines
     end
 
     test "infers correct type for integer literal in the fixture" do
@@ -34,7 +33,7 @@ defmodule Typle.InferenceTest do
           type.kind == :integer and not type.dynamic?
         end)
 
-      assert length(integer_entries) > 0
+      assert [_ | _] = integer_entries
     end
   end
 end

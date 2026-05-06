@@ -6,9 +6,9 @@ defmodule Typle.Inference.Expr do
   returning `{type, updated_env}`.
   """
 
-  alias Typle.Type
-  alias Typle.Inference.{Env, Pattern, Guard, Builtins}
+  alias Typle.Inference.{Builtins, Env, Guard, Pattern}
   alias Typle.SignatureStore
+  alias Typle.Type
 
   @doc """
   Infers the type of an AST expression and records it in the environment.

@@ -5,8 +5,8 @@ defmodule Typle.Unstable.CompilerHook do
   # This module depends on private Elixir compiler internals and is expected
   # to break across Elixir versions. All calls are wrapped in try/rescue.
 
-  alias Typle.Unstable.TypeCapture
   alias Typle.Beam
+  alias Typle.Unstable.TypeCapture
 
   @doc """
   Compiles the given file with type capture enabled.

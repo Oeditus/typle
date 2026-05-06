@@ -22,28 +22,26 @@ defmodule Typle.Diagnostic do
   """
   @spec capture(list(String.t())) :: {:ok, [diagnostic_info()]} | {:error, term()}
   def capture(file_paths) when is_list(file_paths) do
-    try do
-      result =
-        Kernel.ParallelCompiler.compile(file_paths,
-          return_diagnostics: true,
-          beam_timestamp: nil
-        )
+    result =
+      Kernel.ParallelCompiler.compile(file_paths,
+        return_diagnostics: true,
+        beam_timestamp: nil
+      )
 
-      diagnostics =
-        case result do
-          {:ok, _modules, warnings} -> warnings
-          {:error, errors, warnings} -> errors ++ warnings
-        end
+    diagnostics =
+      case result do
+        {:ok, _modules, warnings} -> warnings
+        {:error, errors, warnings} -> errors ++ warnings
+      end
 
-      infos =
-        diagnostics
-        |> Enum.filter(&type_diagnostic?/1)
-        |> Enum.map(&parse_diagnostic/1)
+    infos =
+      diagnostics
+      |> Enum.filter(&type_diagnostic?/1)
+      |> Enum.map(&parse_diagnostic/1)
 
-      {:ok, infos}
-    rescue
-      e -> {:error, {:compilation_failed, Exception.message(e)}}
-    end
+    {:ok, infos}
+  rescue
+    e -> {:error, {:compilation_failed, Exception.message(e)}}
   end
 
   @doc """

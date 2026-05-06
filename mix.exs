@@ -16,6 +16,12 @@ defmodule Typle.MixProject do
       description: description(),
       package: package(),
       docs: docs(),
+      aliases: aliases(),
+      dialyzer: [
+        plt_add_apps: [:mix],
+        plt_core_path: "priv/plts",
+        plt_file: {:no_warn, "priv/plts/dialyzer.plt"}
+      ],
       name: "Typle",
       source_url: @source_url,
       homepage_url: @homepage_url
@@ -33,7 +39,16 @@ defmodule Typle.MixProject do
 
   defp deps do
     [
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}
+    ]
+  end
+
+  defp aliases do
+    [
+      quality: ["format", "credo --strict", "dialyzer"],
+      "quality.ci": ["format --check-formatted", "credo --strict", "dialyzer"]
     ]
   end
 

@@ -51,16 +51,7 @@ defmodule Mix.Tasks.Typle do
         output_result(result, file, line, col, format)
 
       {:ok, file, line} ->
-        result =
-          if unstable? do
-            case Typle.Unstable.types_for(find_module(file)) do
-              {:ok, _} = ok -> ok
-              _ -> Typle.types_for_file(file)
-            end
-          else
-            Typle.types_for_file(file)
-          end
-
+        result = query_line_types(file, unstable?)
         output_line_results(result, line, format)
 
       :error ->
@@ -132,6 +123,15 @@ defmodule Mix.Tasks.Typle do
   defp output_line_results({:error, reason}, _line, _format) do
     Mix.shell().error("Error: #{inspect(reason)}")
   end
+
+  defp query_line_types(file, true) do
+    case Typle.Unstable.types_for(find_module(file)) do
+      {:ok, _} = ok -> ok
+      _ -> Typle.types_for_file(file)
+    end
+  end
+
+  defp query_line_types(file, false), do: Typle.types_for_file(file)
 
   defp find_module(file) do
     # Best-effort: derive module name from file path

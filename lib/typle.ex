@@ -24,7 +24,7 @@ defmodule Typle do
   see `Typle.Unstable`.
   """
 
-  alias Typle.{Type, Beam, Inference, SignatureStore}
+  alias Typle.{Beam, Inference, SignatureStore, Type}
 
   @doc """
   Returns the inferred type at the given file position.
