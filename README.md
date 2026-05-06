@@ -24,8 +24,8 @@ exclusively inside the compiler. There is no public API to query it.
   per-expression types.
 - **Compilation tracers** fire events for imports, aliases, and module
   definitions—but carry no type data.
-- **`Module.Types`** and its submodules are private (`@moduledoc false`) and
-  subject to change without notice.
+- **[`Module.Types`](https://github.com/elixir-lang/elixir/blob/v1.19.5/lib/elixir/lib/module/types.ex)**
+  and its submodules are private (`@moduledoc false`) and subject to change without notice.
 
 Tools like Credo, LSPs, and custom Mix tasks that need type information are
 left in the dark.
