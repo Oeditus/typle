@@ -51,54 +51,71 @@ defmodule Typle.Type do
   @spec dynamic(t()) :: t()
   def dynamic(%__MODULE__{} = inner \\ term()), do: %{inner | dynamic?: true}
 
+  @doc "Returns the `integer()` type."
   @spec integer() :: t()
   def integer, do: %__MODULE__{kind: :integer}
 
+  @doc "Returns the `float()` type."
   @spec float() :: t()
   def float, do: %__MODULE__{kind: :float}
 
+  @doc "Returns `integer() or float()` -- the number type."
   @spec number() :: t()
   def number, do: union([integer(), float()])
 
+  @doc "Returns the `binary()` type."
   @spec binary() :: t()
   def binary, do: %__MODULE__{kind: :binary}
 
+  @doc "Returns the `bitstring()` type."
   @spec bitstring() :: t()
   def bitstring, do: %__MODULE__{kind: :bitstring}
 
+  @doc "Returns the `pid()` type."
   @spec pid() :: t()
   def pid, do: %__MODULE__{kind: :pid}
 
+  @doc "Returns the `port()` type."
   @spec port() :: t()
   def port, do: %__MODULE__{kind: :port}
 
+  @doc "Returns the `reference()` type."
   @spec reference() :: t()
   def reference, do: %__MODULE__{kind: :reference}
 
+  @doc "Returns `true or false` -- the boolean type."
   @spec boolean() :: t()
   def boolean, do: union([atom(true), atom(false)])
 
+  @doc "Returns the `atom()` type, optionally with a literal value."
   @spec atom(atom() | nil) :: t()
   def atom(literal \\ nil), do: %__MODULE__{kind: :atom, params: literal}
 
+  @doc "Returns a closed tuple type with the given element types."
   @spec tuple(list(t())) :: t()
   def tuple(elements), do: %__MODULE__{kind: :tuple, params: {:closed, elements}}
 
+  @doc "Returns an open tuple type (at least the given elements, possibly more)."
   @spec open_tuple(list(t())) :: t()
   def open_tuple(elements), do: %__MODULE__{kind: :tuple, params: {:open, elements}}
 
+  @doc "Returns a `list()` type with the given element type (defaults to `term()`)."
   @spec list(t()) :: t()
   def list(elem_type \\ term()), do: %__MODULE__{kind: :list, params: elem_type}
 
+  @doc "Returns the `empty_list()` type."
   @spec empty_list() :: t()
   def empty_list, do: %__MODULE__{kind: :empty_list}
 
+  @doc "Returns a `map()` type with optional keys and open/closed flag."
   @spec map(keyword(), boolean()) :: t()
   def map(keys \\ [], open? \\ true), do: %__MODULE__{kind: :map, params: {keys, open?}}
 
+  @doc "Returns a `function()` type with the given clauses."
   @spec function(list({list(t()), t()})) :: t()
   def function(clauses), do: %__MODULE__{kind: :function, params: clauses}
 
+  @doc "Returns a union of the given types. Single-element unions collapse."
   @spec union(list(t())) :: t()
   def union([single]), do: single
 
@@ -117,10 +134,12 @@ defmodule Typle.Type do
     end
   end
 
+  @doc "Returns an intersection of the given types. Single-element intersections collapse."
   @spec intersection(list(t())) :: t()
   def intersection([single]), do: single
   def intersection(types), do: %__MODULE__{kind: :intersection, params: types}
 
+  @doc "Returns the negation of the given type."
   @spec negation(t()) :: t()
   def negation(type), do: %__MODULE__{kind: :negation, params: type}
 
