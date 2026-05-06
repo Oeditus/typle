@@ -90,7 +90,7 @@ defmodule Typle.MixProject do
       homepage_url: @homepage_url,
       formatters: ["html"],
       groups_for_modules: [
-        "Public API": [Typle],
+        "Public API": [Typle, Typle.ExprMap],
         "Type System": [Typle.Type],
         "Beam Reader": [Typle.Beam, Typle.SignatureStore],
         "Inference Engine": [
