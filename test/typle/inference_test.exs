@@ -38,6 +38,16 @@ defmodule Typle.InferenceTest do
       assert [_ | _] = integer_entries
     end
 
+    test "narrows type through match operator in function head" do
+      {:ok, type_map} = Inference.infer_file(@fixture_path)
+
+      # Line 21: def identity(%{} = x), do: x
+      # x at column 30 should be map (narrowed by %{} match)
+      body_x = Map.get(type_map, {21, 30})
+      assert body_x != nil, "expected type recorded at {21, 30} (body x)"
+      assert body_x.kind == :map
+    end
+
     test "decomposes case pattern types from Integer.parse" do
       {:ok, type_map} = Inference.infer_file(@fixture_path)
 

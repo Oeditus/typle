@@ -18,5 +18,6 @@ defmodule Typle.Test.SampleModule do
     end
   end
 
+  def identity(%{} = x), do: x
   def identity(x), do: x
 end

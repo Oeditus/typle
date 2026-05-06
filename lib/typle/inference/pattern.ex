@@ -40,10 +40,18 @@ defmodule Typle.Inference.Pattern do
   # Underscore -- no binding
   defp do_infer({:_, _meta, _ctx}, _matched_type, acc), do: acc
 
-  # Match operator: pattern = expr (both sides get the matched type)
+  # Match operator: pattern = expr
+  # Both sides match the same value, so structural constraints from
+  # either side narrow the type for the other.  E.g. `%{} = x` narrows
+  # `x` to map(); `{a, b} = y` narrows `y` to a 2-tuple.
   defp do_infer({:=, _meta, [left, right]}, matched_type, acc) do
-    acc = do_infer(left, matched_type, acc)
-    do_infer(right, matched_type, acc)
+    narrowed =
+      matched_type
+      |> narrow_by_pattern(left)
+      |> narrow_by_pattern(right)
+
+    acc = do_infer(left, narrowed, acc)
+    do_infer(right, narrowed, acc)
   end
 
   # Pin operator: ^x -- no new binding
@@ -118,6 +126,28 @@ defmodule Typle.Inference.Pattern do
   # Fallback: unknown pattern shape
   defp do_infer(_other, _matched_type, acc), do: acc
 
+  # -- Pattern shape inference -------------------------------------------------
+  #
+  # Determines the structural shape a pattern implies (map, tuple, list, ...)
+  # and narrows the matched type accordingly.
+
+  defp narrow_by_pattern(type, pattern) do
+    case pattern_shape(pattern) do
+      nil -> type
+      shape -> narrow(type, shape)
+    end
+  end
+
+  defp pattern_shape({:%{}, _, _}), do: :map
+  defp pattern_shape({:%, _, [_, {:%{}, _, _}]}), do: :map
+  defp pattern_shape({:{}, _, elements}), do: {:tuple, length(elements)}
+  defp pattern_shape({:<<>>, _, _}), do: :binary
+  # 2-element tuples in AST are always literal tuple patterns
+  defp pattern_shape({_left, _right}), do: {:tuple, 2}
+  defp pattern_shape([{:|, _, _}]), do: :list
+  defp pattern_shape(elements) when is_list(elements) and elements != [], do: :list
+  defp pattern_shape(_), do: nil
+
   # -- Type narrowing ---------------------------------------------------------
   #
   # Given a type and a pattern shape descriptor, returns the subset of the
@@ -144,10 +174,18 @@ defmodule Typle.Inference.Pattern do
     end
   end
 
+  # term() (top type): narrowing to a shape produces that shape's type
+  defp narrow(%Type{kind: :term}, shape), do: shape_to_type(shape)
+
   # concrete type: check shape compatibility
   defp narrow(type, shape) do
     if shape_matches?(type, shape), do: type, else: Type.dynamic()
   end
+
+  defp shape_to_type(:map), do: Type.map()
+  defp shape_to_type(:list), do: Type.list()
+  defp shape_to_type(:binary), do: Type.binary()
+  defp shape_to_type({:tuple, arity}), do: Type.tuple(List.duplicate(Type.dynamic(), arity))
 
   # -- Shape matching predicates ----------------------------------------------
 
@@ -166,6 +204,8 @@ defmodule Typle.Inference.Pattern do
   defp shape_matches?(%Type{kind: :list}, :list), do: true
   defp shape_matches?(%Type{kind: :empty_list}, :list), do: true
   defp shape_matches?(%Type{kind: :map}, :map), do: true
+  defp shape_matches?(%Type{kind: :binary}, :binary), do: true
+  defp shape_matches?(%Type{kind: :bitstring}, :binary), do: true
   defp shape_matches?(%Type{kind: :term}, _shape), do: true
 
   # Recurse into unions

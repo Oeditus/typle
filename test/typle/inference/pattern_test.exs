@@ -174,6 +174,35 @@ defmodule Typle.Inference.PatternTest do
     end
   end
 
+  describe "match operator narrowing" do
+    test "%{} = x narrows x to map" do
+      # %{} = x  -- the map pattern constrains the matched value
+      ast = {:=, [], [{:%{}, [], []}, {:x, [], nil}]}
+      {bindings, _} = Pattern.infer(ast, Type.dynamic())
+      assert %{x: %Type{kind: :map, dynamic?: true}} = bindings
+    end
+
+    test "{a, b} = y narrows y to a 2-tuple" do
+      ast = {:=, [], [{{:a, [], nil}, {:b, [], nil}}, {:y, [], nil}]}
+      {bindings, _} = Pattern.infer(ast, Type.dynamic())
+      # y gets the narrowed tuple type
+      assert %Type{kind: :tuple, dynamic?: true} = bindings[:y]
+    end
+
+    test "[h | t] = x narrows x to list" do
+      ast = {:=, [], [[{:|, [], [{:h, [], nil}, {:t, [], nil}]}], {:x, [], nil}]}
+      {bindings, _} = Pattern.infer(ast, Type.dynamic())
+      assert %Type{kind: :list, dynamic?: true} = bindings[:x]
+    end
+
+    test "match narrowing works with concrete type" do
+      # %{} = x against map() should keep map()
+      ast = {:=, [], [{:%{}, [], []}, {:x, [], nil}]}
+      {bindings, _} = Pattern.infer(ast, Type.map())
+      assert %{x: %Type{kind: :map, dynamic?: false}} = bindings
+    end
+  end
+
   describe "position recording" do
     test "records variable positions in pattern" do
       ast = {:x, [line: 5, column: 3], nil}
