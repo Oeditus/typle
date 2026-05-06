@@ -199,14 +199,12 @@ defmodule Typle do
   defp format_map_result(error, _expr?, _file_fn), do: error
 
   defp source_for_module(module) do
-    try do
-      case module.module_info(:compile)[:source] do
-        nil -> nil
-        source -> List.to_string(source)
-      end
-    rescue
-      _ -> nil
+    case module.module_info(:compile)[:source] do
+      nil -> nil
+      source -> List.to_string(source)
     end
+  rescue
+    _ -> nil
   end
 
   defp unwrap_expr_map({:ok, map}), do: map
