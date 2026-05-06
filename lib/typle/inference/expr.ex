@@ -36,7 +36,9 @@ defmodule Typle.Inference.Expr do
 
   def infer({:=, meta, [pattern, expr]}, env) do
     {expr_type, env} = infer(expr, env)
-    bindings = Pattern.infer(pattern, expr_type)
+    {bindings, positions} = Pattern.infer(pattern, expr_type)
+
+    env = merge_positions(env, positions)
 
     env =
       Enum.reduce(bindings, env, fn {var, type}, acc ->
@@ -117,7 +119,8 @@ defmodule Typle.Inference.Expr do
       Enum.reduce(clauses, {[], [], env}, fn {:->, _clause_meta, [[pattern | guards], body]},
                                              {types, envs, acc_env} ->
         # Extract variable bindings from pattern
-        bindings = Pattern.infer(pattern, subject_type)
+        {bindings, positions} = Pattern.infer(pattern, subject_type)
+        acc_env = merge_positions(acc_env, positions)
 
         # Refine with guard types
         guard_refs =
@@ -196,7 +199,8 @@ defmodule Typle.Inference.Expr do
       Enum.reduce(clauses, env, fn
         {:<-, _m, [pattern, expr]}, acc_env ->
           {expr_type, acc_env} = infer(expr, acc_env)
-          bindings = Pattern.infer(pattern, expr_type)
+          {bindings, positions} = Pattern.infer(pattern, expr_type)
+          acc_env = merge_positions(acc_env, positions)
           Enum.reduce(bindings, acc_env, fn {var, type}, e -> Env.put_var(e, var, type) end)
 
         expr, acc_env ->
@@ -335,5 +339,11 @@ defmodule Typle.Inference.Expr do
     else
       env
     end
+  end
+
+  defp merge_positions(env, positions) do
+    Enum.reduce(positions, env, fn {{line, col}, type}, acc ->
+      Env.record_type(acc, line, col, type)
+    end)
   end
 end

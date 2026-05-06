@@ -37,6 +37,21 @@ defmodule Typle.InferenceTest do
 
       assert [_ | _] = integer_entries
     end
+
+    test "decomposes case pattern types from Integer.parse" do
+      {:ok, type_map} = Inference.infer_file(@fixture_path)
+
+      # Line 16: {num, _rest} -> {:ok, num}
+      # num in pattern at column 8 should be integer (from tuple decomposition)
+      pattern_num = Map.get(type_map, {16, 8})
+      assert pattern_num != nil, "expected type recorded at {16, 8} (pattern num)"
+      assert pattern_num.kind == :integer
+
+      # num in body at column 29 should also be integer (from scope lookup)
+      body_num = Map.get(type_map, {16, 29})
+      assert body_num != nil, "expected type recorded at {16, 29} (body num)"
+      assert body_num.kind == :integer
+    end
   end
 
   describe "macro expansion inference" do

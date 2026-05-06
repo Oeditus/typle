@@ -19,14 +19,23 @@ defmodule Typle.Inference do
 
   Returns a map of `{line, col} => type` for each expression node
   that has position metadata.
+
+  ## Options
+
+    * `:unstable` - when `true`, uses the compiler-replay engine
+      from `Typle.Unstable` for deeper inference (default: `false`)
   """
-  @spec infer_file(String.t()) :: {:ok, type_map()} | {:error, term()}
-  def infer_file(file_path) do
-    with {:ok, ast} <- Expander.expand_file(file_path) do
-      module = extract_module_name(ast)
-      env = Env.new(module: module, file: file_path)
-      {_type, env} = walk_top_level(ast, env)
-      {:ok, Env.all_types(env)}
+  @spec infer_file(String.t(), keyword()) :: {:ok, type_map()} | {:error, term()}
+  def infer_file(file_path, opts \\ []) do
+    if opts[:unstable] do
+      Typle.Unstable.types_for_file(file_path)
+    else
+      with {:ok, ast} <- Expander.expand_file(file_path) do
+        module = extract_module_name(ast)
+        env = Env.new(module: module, file: file_path)
+        {_type, env} = walk_top_level(ast, env)
+        {:ok, Env.all_types(env)}
+      end
     end
   end
 
@@ -35,12 +44,21 @@ defmodule Typle.Inference do
 
   Locates the source file from the module's compile info and delegates
   to `infer_file/1`.
+
+  ## Options
+
+    * `:unstable` - when `true`, uses the compiler-replay engine
+      from `Typle.Unstable` for deeper inference (default: `false`)
   """
-  @spec infer_module(module()) :: {:ok, type_map()} | {:error, term()}
-  def infer_module(module) do
-    case module.module_info(:compile)[:source] do
-      nil -> {:error, {:no_source, module}}
-      source -> infer_file(List.to_string(source))
+  @spec infer_module(module(), keyword()) :: {:ok, type_map()} | {:error, term()}
+  def infer_module(module, opts \\ []) do
+    if opts[:unstable] do
+      Typle.Unstable.types_for(module)
+    else
+      case module.module_info(:compile)[:source] do
+        nil -> {:error, {:no_source, module}}
+        source -> infer_file(List.to_string(source))
+      end
     end
   rescue
     _ -> {:error, {:module_not_available, module}}
@@ -115,9 +133,10 @@ defmodule Typle.Inference do
     args = args || []
 
     # Infer argument types from patterns (start with dynamic)
-    bindings =
-      Enum.reduce(args, %{}, fn arg, acc ->
-        Map.merge(acc, Pattern.infer(arg, Type.dynamic()))
+    {bindings, env} =
+      Enum.reduce(args, {%{}, env}, fn arg, {binds, acc_env} ->
+        {new_binds, positions} = Pattern.infer(arg, Type.dynamic())
+        {Map.merge(binds, new_binds), merge_positions(acc_env, positions)}
       end)
 
     # Refine with guard
@@ -135,9 +154,10 @@ defmodule Typle.Inference do
     {_fun_name, _meta, args} = head
     args = args || []
 
-    bindings =
-      Enum.reduce(args, %{}, fn arg, acc ->
-        Map.merge(acc, Pattern.infer(arg, Type.dynamic()))
+    {bindings, env} =
+      Enum.reduce(args, {%{}, env}, fn arg, {binds, acc_env} ->
+        {new_binds, positions} = Pattern.infer(arg, Type.dynamic())
+        {Map.merge(binds, new_binds), merge_positions(acc_env, positions)}
       end)
 
     env = Env.push_scope(env, bindings)
@@ -148,4 +168,10 @@ defmodule Typle.Inference do
   end
 
   defp walk_definition(_, env), do: {Type.dynamic(), env}
+
+  defp merge_positions(env, positions) do
+    Enum.reduce(positions, env, fn {{line, col}, type}, acc ->
+      Env.record_type(acc, line, col, type)
+    end)
+  end
 end

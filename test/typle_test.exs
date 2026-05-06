@@ -44,5 +44,15 @@ defmodule TypleTest do
     test "returns error for position with no recorded type" do
       assert {:error, :no_type_at_position} = Typle.type_at(@fixture_path, 1, 1)
     end
+
+    test "returns integer for pattern variable num at line 16, col 8" do
+      assert {:ok, type} = Typle.type_at(@fixture_path, 16, 8)
+      assert type.kind == :integer
+    end
+
+    test "returns integer for body variable num at line 16, col 29" do
+      assert {:ok, type} = Typle.type_at(@fixture_path, 16, 29)
+      assert type.kind == :integer
+    end
   end
 end

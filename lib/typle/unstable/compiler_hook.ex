@@ -18,7 +18,9 @@ defmodule Typle.Unstable.CompilerHook do
     TypeCapture.init()
 
     try do
-      # Force recompile with our tracer
+      # Suppress "redefining module" warnings during replay
+      prev_ignore = Code.get_compiler_option(:ignore_module_conflict)
+      Code.put_compiler_option(:ignore_module_conflict, true)
       Code.put_compiler_option(:tracers, [__MODULE__])
 
       _result =
@@ -28,6 +30,7 @@ defmodule Typle.Unstable.CompilerHook do
         )
 
       Code.put_compiler_option(:tracers, [])
+      Code.put_compiler_option(:ignore_module_conflict, prev_ignore || false)
 
       captures = TypeCapture.all()
 
@@ -41,6 +44,7 @@ defmodule Typle.Unstable.CompilerHook do
     rescue
       e ->
         Code.put_compiler_option(:tracers, [])
+        Code.put_compiler_option(:ignore_module_conflict, false)
         {:error, {:compiler_hook_failed, Exception.message(e)}}
     end
   end

@@ -59,16 +59,20 @@ defmodule Typle.Unstable do
     end
   end
 
-  # -- Private ---------------------------------------------------------------
+  @doc """
+  Returns all inferred types for a source file using compiler replay.
 
-  defp types_for_file(file) do
+  Falls back to stable inference if the compiler hook fails.
+  """
+  @spec types_for_file(String.t()) :: {:ok, Typle.Inference.type_map()} | {:error, term()}
+  def types_for_file(file) do
     TypeCapture.init()
 
     case CompilerHook.compile_with_capture(file) do
-      {:ok, captures} ->
+      {:ok, captures} when captures != %{} ->
         {:ok, captures}
 
-      {:error, _reason} ->
+      _empty_or_error ->
         # Fall back to stable inference
         Typle.Inference.infer_file(file)
     end
