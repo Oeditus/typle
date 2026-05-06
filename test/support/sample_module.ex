@@ -19,6 +19,4 @@ defmodule Typle.Test.SampleModule do
   end
 
   def identity(x), do: x
-
-  defp secret, do: 42
 end
