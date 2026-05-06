@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.20.0-rc.4'
+          otp-version: '28'
+
+      - name: Restore dependencies cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-release-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-release-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile (warnings as errors)
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests
+        run: mix test
+        env:
+          MIX_ENV: test
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [verify]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.20.0-rc.4'
+          otp-version: '28'
+
+      - name: Restore dependencies cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-release-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-release-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Build documentation
+        run: mix docs
+        env:
+          MIX_ENV: dev
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            echo "version=$(grep '@version' mix.exs | sed 's/.*"\(.*\)".*/\1/')" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Package docs
+        run: |
+          tar czf typle-docs-${{ steps.version.outputs.version }}.tar.gz -C doc .
+
+      - name: Create checksums
+        run: |
+          sha256sum typle-docs-${{ steps.version.outputs.version }}.tar.gz > checksums.sha256
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            typle-docs-${{ steps.version.outputs.version }}.tar.gz
+            checksums.sha256
+          body: |
+            ## Typle ${{ steps.version.outputs.version }}
+
+            Expression-level type query library for Elixir 1.20+.
+
+            ### Installation
+
+            **From Hex.pm:**
+            ```elixir
+            def deps do
+              [{:typle, "~> ${{ steps.version.outputs.version }}"}]
+            end
+            ```
+
+            **Or install directly:**
+            ```bash
+            mix hex.info typle
+            ```
+
+            ### Changes
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for details.
+
+            ### Checksums
+
+            Verify your downloads:
+            ```bash
+            sha256sum -c checksums.sha256
+            ```
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to Hex.pm
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: |
+          mix hex.publish --yes || echo "Hex publish skipped (set HEX_API_KEY secret to enable)"
