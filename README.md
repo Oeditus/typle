@@ -11,19 +11,19 @@ Typle reads inferred type signatures from compiled `.beam` files and performs
 best-effort type inference to answer the question the Elixir compiler can answer
 internally but does not expose:
 
-> "What type did the compiler infer for this expression at line N, column C?"
+> “What type did the compiler infer for this expression at line N, column C?”
 
 ## The Problem
 
 Elixir 1.20 introduced a powerful set-theoretic type system that infers types
 across function definitions, guards, patterns, and clauses. The compiler uses
-these types to detect bugs at compile time -- but the type information lives
+these types to detect bugs at compile time—but the type information lives
 exclusively inside the compiler. There is no public API to query it.
 
 - **The ExCk chunk** in `.beam` files stores per-function signatures, but not
   per-expression types.
 - **Compilation tracers** fire events for imports, aliases, and module
-  definitions -- but carry no type data.
+  definitions—but carry no type data.
 - **`Module.Types`** and its submodules are private (`@moduledoc false`) and
   subject to change without notice.
 
@@ -36,7 +36,7 @@ Typle operates in layers, from most stable to most experimental:
 
 ### Layer 1: Beam Signature Reader (`Typle.Beam`)
 
-Reads the `:elixir_checker_v7` data from the "ExCk" chunk in compiled `.beam`
+Reads the `:elixir_checker_v7` data from the ‘ExCk’ chunk in compiled `.beam`
 files. Decodes the internal bitmap/map type representation into human-friendly
 `Typle.Type` structs. This gives you per-function signatures for any compiled
 module.
@@ -168,13 +168,20 @@ compiler computes. It will never achieve perfect parity because:
 
 - The compiler's type checker is tightly integrated with macro expansion,
   module compilation order, and cross-module dependency resolution.
-- Per-expression type environments are ephemeral -- they exist only during
+- Per-expression type environments are ephemeral—they exist only during
   the compiler's type checking pass and are discarded afterward.
-- The ExCk chunk format (`:elixir_checker_v7`) is internal and undocumented;
+- The ‘ExCk’ chunk format (`:elixir_checker_v7`) is internal and undocumented;
   it may change in future Elixir releases.
 
 When Typle cannot determine a type, it honestly returns `dynamic()` rather
 than guessing wrong.
+
+## Not yet implemented
+
+- [ ] Type annotations / signatures (Elixir does not yet have user-facing type syntax)
+- [ ] Protocol dispatch type tracking
+- [ ] Macro expansion type tracking
+- [ ] Cross-module dataflow analysis beyond function signatures
 
 ## License
 
