@@ -188,11 +188,15 @@ defmodule Typle.Inference.Expr do
   # -- With expression -------------------------------------------------------
 
   def infer({:with, meta, clauses_and_body} = node, env) do
-    # The body keywords ([do: ..., else: ...]) are always the last element
-    # as a keyword list, not a tuple, so split_with won't find them.
+    # The body keywords ([do: ..., else: ...]) are normally the last element as
+    # a keyword list, but a bare `{:do, body}` tuple also occurs -- e.g. after
+    # macro expansion, or for a single-clause `with` written inline. Handle
+    # both: anything else would leave a tuple in `clauses` and blow up when it
+    # is enumerated.
     {clauses, body_kw} =
       case :lists.reverse(clauses_and_body) do
         [kw | rest] when is_list(kw) -> {:lists.reverse(rest), kw}
+        [{key, _} = kw | rest] when key in [:do, :else] -> {:lists.reverse(rest), [kw]}
         _ -> {clauses_and_body, []}
       end
 
@@ -242,12 +246,29 @@ defmodule Typle.Inference.Expr do
 
   # -- Map literal: %{...} --------------------------------------------------
 
+  # A struct update `%{struct | key: value}` parses as
+  #
+  #     {:%{}, meta, [{:|, _, [struct, [key: value, ...]]}]}
+  #
+  # i.e. `pairs` holds a *single* `:|` tuple rather than `{key, value}` pairs.
+  # This clause must precede the generic one below: that one destructures each
+  # element as `{_key, val}`, so a `:|` tuple raises FunctionClauseError and
+  # takes down inference for the whole file. Struct updates are ubiquitous in
+  # real Elixir, so this is not an edge case.
+  def infer({:%{}, meta, [{:|, _, [struct, updates]}]} = node, env) do
+    # Infer the struct being updated so its sub-expressions are still recorded.
+    {_struct_type, env} = infer(struct, env)
+
+    # And each updated value; `updates` may be a keyword list or a map literal.
+    env = infer_map_pairs(updates, env)
+
+    type = Type.map()
+    env = maybe_record(env, meta, type, Macro.to_string(node))
+    {type, env}
+  end
+
   def infer({:%{}, meta, pairs} = node, env) do
-    env =
-      Enum.reduce(pairs, env, fn {_key, val}, acc ->
-        {_type, acc} = infer(val, acc)
-        acc
-      end)
+    env = infer_map_pairs(pairs, env)
 
     type = Type.map()
     env = maybe_record(env, meta, type, Macro.to_string(node))
@@ -319,6 +340,27 @@ defmodule Typle.Inference.Expr do
   def infer(_other, env), do: {Type.dynamic(), env}
 
   # -- Helpers ---------------------------------------------------------------
+
+  # Walks map/keyword pairs, inferring each value. Tolerates shapes that are
+  # not `{key, value}` tuples (the `:|` struct-update form has its own clause
+  # above, but this keeps the walk total rather than raising on anything
+  # unexpected).
+  defp infer_map_pairs(pairs, env) when is_list(pairs) do
+    Enum.reduce(pairs, env, fn
+      {_key, val}, acc ->
+        {_type, acc} = infer(val, acc)
+        acc
+
+      other, acc ->
+        {_type, acc} = infer(other, acc)
+        acc
+    end)
+  end
+
+  defp infer_map_pairs(other, env) do
+    {_type, env} = infer(other, env)
+    env
+  end
 
   defp infer_args(args, env) do
     Enum.map_reduce(args, env, fn arg, acc -> infer(arg, acc) end)

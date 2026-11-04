@@ -3,8 +3,15 @@ defmodule Typle.Beam do
   Reads inferred type signatures from compiled `.beam` files.
 
   The Elixir 1.20 compiler stores function signatures in the "ExCk" chunk
-  using an internal representation tagged `:elixir_checker_v7`. This module
-  decodes that representation into `Typle.Type` structs.
+  using an internal representation tagged `:elixir_checker_v7` (Elixir 1.20.0-
+  1.20.3) or `:elixir_checker_v8` (1.20.4+). This module decodes both into
+  `Typle.Type` structs.
+
+  The two versions differ only in how the export table is shaped: v7 stores it
+  as a map, v8 as a list of `{key, value}` tuples. Everything else -- the
+  `:sig`/`:infer` wrapper and the type representation itself -- is identical,
+  so `decode_exck/1` normalises v8 to the v7 shape and the rest of the module
+  is version-agnostic.
   """
 
   alias Typle.Type
@@ -15,7 +22,7 @@ defmodule Typle.Beam do
           clauses: [{[Type.t()], Type.t()}]
         }
 
-  @supported_versions [:elixir_checker_v7]
+  @supported_versions [:elixir_checker_v7, :elixir_checker_v8]
 
   # Bitmap flags -- reverse-engineered from elixir_checker_v7 representations.
   # Each bit encodes a "simple" type that has no further internal structure.
@@ -119,7 +126,7 @@ defmodule Typle.Beam do
   defp decode_exck(binary) do
     case :erlang.binary_to_term(binary) do
       {version, %{exports: exports}} when version in @supported_versions ->
-        {:ok, exports}
+        {:ok, normalise_exports(exports)}
 
       {version, _} ->
         {:error, {:unsupported_checker_version, version}}
@@ -128,6 +135,11 @@ defmodule Typle.Beam do
         {:error, :invalid_exck_format}
     end
   end
+
+  # v7 stores the export table as a map; v8 as a list of `{key, value}` tuples.
+  # Normalise to the map shape so the rest of the module is version-agnostic.
+  defp normalise_exports(exports) when is_map(exports), do: exports
+  defp normalise_exports(exports) when is_list(exports), do: Map.new(exports)
 
   # -- Private: Signature decoding -------------------------------------------
 
