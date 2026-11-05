@@ -39,7 +39,11 @@ defmodule Typle.MixProject do
 
   defp deps do
     [
-      {:ex_panda, "~> 0.2"},
+      # 0.3.0 is required: it fixes `with`/`for` splicing their body options
+      # into the positional argument list, which produced `with x <- y, {:do, z}`
+      # -- invalid AST that `Macro.to_string/1` cannot even print, so inference
+      # crashed on every `with` or `for` it met. 0.2.x is affected.
+      {:ex_panda, "~> 0.3"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}

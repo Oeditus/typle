@@ -347,6 +347,16 @@ defmodule Typle.Inference.Expr do
   # unexpected).
   defp infer_map_pairs(pairs, env) when is_list(pairs) do
     Enum.reduce(pairs, env, fn
+      # Struct update: `%{struct | key: value}` parses as
+      # `{:%{}, _, [{:|, _, [struct, pairs]}]}`, so the single "pair" is a bare
+      # `:|` tuple rather than a `{key, value}` pair. Infer the struct being
+      # updated and then its new values; without this the tuple fell through to
+      # `infer(other, env)`, which has no clause for a bare `:|` atom and raised
+      # FunctionClauseError on every struct update in the file.
+      {:|, _meta, [struct, updates]}, acc ->
+        {_type, acc} = infer(struct, acc)
+        infer_map_pairs(updates, acc)
+
       {_key, val}, acc ->
         {_type, acc} = infer(val, acc)
         acc
