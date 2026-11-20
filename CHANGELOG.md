@@ -10,6 +10,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Concurrent inference could crash the VM's error reporting.** Macro
+  expansion replaced the globally registered `:standard_error` process to
+  suppress compiler diagnostics, racing with parallel callers such as Credo
+  checks. Diagnostics are now captured locally inside each expansion task
+  with `Code.with_diagnostics/2`, leaving stderr available to other processes.
 - **Inference crashed on struct update syntax.** `%{struct | key: value}` parses
   as `{:%{}, _, [{:|, _, [struct, [key: value]]}]}` -- the map-literal clause
   destructured each element as `{key, value}` and raised `FunctionClauseError`

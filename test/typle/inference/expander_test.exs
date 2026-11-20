@@ -3,6 +3,15 @@ defmodule Typle.Inference.ExpanderTest do
 
   alias Typle.Inference.Expander
 
+  defmodule StderrProbe do
+    @moduledoc false
+
+    defmacro __using__(_opts) do
+      IO.warn("expansion diagnostic")
+      inspect(Process.whereis(:standard_error))
+    end
+  end
+
   describe "expand_file/1" do
     test "returns {:ok, ast} for a valid file" do
       path = Path.expand("../../support/sample_module.ex", __DIR__)
@@ -12,6 +21,47 @@ defmodule Typle.Inference.ExpanderTest do
 
     test "returns {:error, _} for a non-existent file" do
       assert {:error, _} = Expander.expand_file("/no/such/file.ex")
+    end
+
+    @tag :tmp_dir
+    test "does not replace stderr during expansion", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "stderr_probe.ex")
+
+      File.write!(path, """
+      defmodule StderrSample do
+        def probe do
+          use #{inspect(StderrProbe)}
+        end
+      end
+      """)
+
+      original = Process.whereis(:standard_error)
+      assert is_pid(original)
+      assert {:ok, ast} = Expander.expand_file(path)
+      assert Macro.to_string(ast) =~ inspect(original)
+      assert Process.whereis(:standard_error) == original
+    end
+
+    test "supports concurrent file expansion and inference" do
+      path = Path.expand("../../support/sample_module.ex", __DIR__)
+      original = Process.whereis(:standard_error)
+      assert {:ok, expected_ast} = Expander.expand_file(path)
+      assert {:ok, expected_inference} = Typle.Inference.infer_file(path)
+
+      1..32
+      |> Task.async_stream(
+        fn _ ->
+          assert Process.whereis(:standard_error) == original
+          assert {:ok, ^expected_ast} = Expander.expand_file(path)
+          assert {:ok, ^expected_inference} = Typle.Inference.infer_file(path)
+          assert Process.whereis(:standard_error) == original
+        end,
+        max_concurrency: 8,
+        timeout: 30_000
+      )
+      |> Enum.each(fn result -> assert {:ok, true} = result end)
+
+      assert Process.whereis(:standard_error) == original
     end
   end
 
@@ -39,6 +89,19 @@ defmodule Typle.Inference.ExpanderTest do
       ast = {:nonexistent_var, [line: 1, column: 1], nil}
       result = Expander.expand_node(ast)
       assert is_tuple(result)
+    end
+
+    test "suppresses diagnostics inside the expansion task" do
+      output =
+        ExUnit.CaptureIO.capture_io(:stderr, fn ->
+          original = Process.whereis(:standard_error)
+          ast = quote do: use(unquote(StderrProbe))
+          expanded = Expander.expand_node(ast)
+          assert Macro.to_string(expanded) =~ inspect(original)
+          assert Process.whereis(:standard_error) == original
+        end)
+
+      assert output == ""
     end
   end
 

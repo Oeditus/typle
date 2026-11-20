@@ -32,7 +32,7 @@ defmodule Typle.Inference.Expander do
   def expand_file(file_path, _opts \\ []) do
     with {:ok, source} <- File.read(file_path),
          {:ok, ast} <- parse(source, file_path) do
-      {:ok, with_quiet_stderr(fn -> expand_defs(ast) end)}
+      {:ok, expand_defs(ast)}
     end
   end
 
@@ -44,7 +44,16 @@ defmodule Typle.Inference.Expander do
   """
   @spec expand_node(Macro.t()) :: Macro.t()
   def expand_node(ast) do
-    task = Task.async(fn -> ExPanda.expand(ast) end)
+    task =
+      Task.async(fn ->
+        # Diagnostic capture is process-local, so it must run inside the task.
+        # Replacing :standard_error would race with other callers and could
+        # suppress unrelated output or leave the VM without an error device.
+        {result, _diagnostics} =
+          Code.with_diagnostics([log: false], fn -> ExPanda.expand(ast) end)
+
+        result
+      end)
 
     case Task.yield(task, @expand_timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, {:ok, expanded}} ->
@@ -88,23 +97,6 @@ defmodule Typle.Inference.Expander do
       token_metadata: true,
       unescape: false
     )
-  end
-
-  # Redirects :standard_error to a disposable StringIO for the duration of
-  # `fun`, so :elixir_expand diagnostics don't leak to the user's terminal.
-  defp with_quiet_stderr(fun) do
-    {:ok, sink} = StringIO.open("")
-    original = Process.whereis(:standard_error)
-    Process.unregister(:standard_error)
-    Process.register(sink, :standard_error)
-
-    try do
-      fun.()
-    after
-      Process.unregister(:standard_error)
-      Process.register(original, :standard_error)
-      StringIO.close(sink)
-    end
   end
 
   # Walk the module AST and expand each def/defp as a whole form
