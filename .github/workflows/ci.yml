@@ -17,10 +17,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # 1.20.4 is the release that switched ExCk to `:elixir_checker_v8` and
+          # stores exports as a list rather than a map -- the exact format change
+          # `Typle.Beam` handles. Testing only the rc would leave that path
+          # unexercised.
+          - elixir: '1.20.4'
+            otp: '29'
+          - elixir: '1.20.4'
+            otp: '28'
           - elixir: '1.20.0-rc.4'
             otp: '27'
-          - elixir: '1.20.0-rc.4'
-            otp: '28'
     steps:
       - uses: actions/checkout@v4
 

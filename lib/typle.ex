@@ -127,6 +127,40 @@ defmodule Typle do
   end
 
   @doc """
+  Same as `types_for_file/2`, but also reports the top-level forms that
+  inference could not handle.
+
+  Inference is best-effort: a construct the walker does not understand costs
+  *that form*, not the whole file. Without this, a caller sees a map that is
+  smaller than expected and has no way to tell why. Each skipped entry is
+  `{line, reason}`.
+
+  ## Examples
+
+      iex> {:ok, _types, []} = Typle.types_for_file_with_skipped("lib/typle/type.ex")
+      iex> :ok
+      :ok
+
+  """
+  @spec types_for_file_with_skipped(String.t(), keyword()) ::
+          {:ok, map(), [{non_neg_integer(), String.t()}]} | {:error, term()}
+  def types_for_file_with_skipped(file, opts \\ []) do
+    expr? = Keyword.get(opts, :expr, true)
+
+    result =
+      if opts[:unstable] do
+        Unstable.types_for_file(file)
+      else
+        Inference.infer_file(file)
+      end
+
+    case format_map_result(result, expr?, fn -> file end) do
+      {:ok, types} -> {:ok, types, skipped_from(result)}
+      error -> error
+    end
+  end
+
+  @doc """
   Reads function signatures from a compiled module's `.beam` file.
 
   Returns the decoded type signatures as stored in the ExCk chunk.
@@ -197,6 +231,15 @@ defmodule Typle do
   end
 
   defp format_map_result(error, _expr?, _file_fn), do: error
+
+  # Extracts the list of top-level forms that inference could not handle, so a
+  # caller can tell the user *why* a map is smaller than expected.
+  defp skipped_from(result) do
+    case result do
+      {:ok, %{skipped: skipped}} when is_list(skipped) -> skipped
+      _ -> []
+    end
+  end
 
   defp source_for_module(module) do
     case module.module_info(:compile)[:source] do

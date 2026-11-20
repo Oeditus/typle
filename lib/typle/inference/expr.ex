@@ -214,17 +214,49 @@ defmodule Typle.Inference.Expr do
       end)
 
     do_body = Keyword.get(body_kw, :do)
+    else_body = Keyword.get(body_kw, :else)
 
-    {result_type, env} = if do_body, do: infer(do_body, env), else: {Type.dynamic(), env}
+    {do_type, env} = if do_body, do: infer(do_body, env), else: {Type.dynamic(), env}
+
+    # The `else` block is part of the expression's value: a `with` that falls
+    # through returns whatever `else` yields. Ignoring it under-reported types
+    # at exactly the error paths a type query is most useful for.
+    #
+    # Note the body is a *list of `->` clauses*, not a single expression, so it
+    # needs `infer_clauses/2` -- handing it to `infer/2` would match the generic
+    # list clause and yield `list(dynamic())`.
+    {else_type, env} = infer_clauses(else_body, env)
+
+    result_type = Type.union([do_type, else_type])
     env = maybe_record(env, meta, result_type, Macro.to_string(node))
     {result_type, env}
   end
 
   # -- Fn (anonymous function) -----------------------------------------------
 
-  def infer({:fn, meta, _clauses} = node, env) do
-    env = maybe_record(env, meta, %Type{kind: :function, params: []}, Macro.to_string(node))
-    {%Type{kind: :function, params: []}, env}
+  def infer({:fn, meta, clauses} = node, env) do
+    {clause_types, env} =
+      Enum.map_reduce(clauses, env, fn {:->, _m, [params, body]}, acc_env ->
+        {bindings, positions} =
+          Enum.reduce(params, {%{}, acc_env}, fn param, {binds, e} ->
+            {new_binds, pos} = Pattern.infer(param, Type.dynamic())
+            {Map.merge(binds, new_binds), merge_positions(e, pos)}
+          end)
+
+        arg_types = Enum.map(params, fn param -> param_type(bindings, param) end)
+
+        scoped_env = Env.push_scope(positions, bindings)
+        {body_type, scoped_env} = infer(body, scoped_env)
+        scoped_env = Env.pop_scope(scoped_env)
+
+        # Carry the body's recorded types/exprs up, but drop the fn-local scope:
+        # parameters must not leak into the enclosing environment.
+        {{arg_types, body_type}, %{acc_env | types: scoped_env.types, exprs: scoped_env.exprs}}
+      end)
+
+    type = Type.function(clause_types)
+    env = maybe_record(env, meta, type, Macro.to_string(node))
+    {type, env}
   end
 
   # -- Try expression --------------------------------------------------------
@@ -232,8 +264,23 @@ defmodule Typle.Inference.Expr do
   def infer({:try, meta, [blocks]} = node, env) do
     do_body = Keyword.get(blocks, :do)
     {do_type, env} = if do_body, do: infer(do_body, env), else: {Type.dynamic(), env}
-    env = maybe_record(env, meta, do_type, Macro.to_string(node))
-    {do_type, env}
+
+    # `rescue`/`catch` bodies are also possible return values of the expression.
+    {branch_types, env} =
+      Enum.reduce([:rescue, :catch], {[do_type], env}, fn key, {types, acc_env} ->
+        case Keyword.get(blocks, key) do
+          nil ->
+            {types, acc_env}
+
+          body ->
+            {type, acc_env} = infer_clauses(body, acc_env)
+            {[type | types], acc_env}
+        end
+      end)
+
+    result_type = Type.union(branch_types)
+    env = maybe_record(env, meta, result_type, Macro.to_string(node))
+    {result_type, env}
   end
 
   # -- Struct literal: %Mod{...} ---------------------------------------------
@@ -293,9 +340,13 @@ defmodule Typle.Inference.Expr do
     type =
       case Builtins.return_type(Kernel, function, arity, arg_types) do
         nil ->
-          case env.module do
-            nil -> Type.dynamic()
-            mod -> SignatureStore.return_type(mod, function, arity, arg_types)
+          # A sibling `def`/`defp` in the file being analysed takes precedence:
+          # its compiled `.beam` is usually absent or stale, so asking the
+          # signature store would answer `dynamic()` for a function whose body
+          # this very walk already inferred.
+          case Env.get_fun_return(env, function, arity) do
+            nil -> resolve_local(env, function, arity, arg_types)
+            local_type -> local_type
           end
 
         builtin_type ->
@@ -340,6 +391,59 @@ defmodule Typle.Inference.Expr do
   def infer(_other, env), do: {Type.dynamic(), env}
 
   # -- Helpers ---------------------------------------------------------------
+
+  # Infers the value of a *clause list* -- the shape `with ... else`, `try ...
+  # rescue`, and `try ... catch` bodies take. Each clause is `{:->, meta,
+  # [patterns, body]}`; the clause list's type is the union of every body type.
+  #
+  # This must not be folded into `infer/2`: a bare list there means a list
+  # *literal*, so routing a clause list through it produced `list(dynamic())`
+  # and silently discarded every branch type.
+  defp infer_clauses(nil, env), do: {Type.none(), env}
+
+  defp infer_clauses(clauses, env) when is_list(clauses) do
+    if Enum.all?(clauses, &match?({:->, _, _}, &1)) do
+      {types, env} =
+        Enum.map_reduce(clauses, env, fn {:->, _meta, [patterns, body]}, acc_env ->
+          # Bind any variables the clause head introduces, in their own scope.
+          {bindings, acc_env} =
+            Enum.reduce(patterns, {%{}, acc_env}, fn pattern, {binds, e} ->
+              {new_binds, positions} = Pattern.infer(pattern, Type.dynamic())
+              {Map.merge(binds, new_binds), merge_positions(e, positions)}
+            end)
+
+          scoped_env = Env.push_scope(acc_env, bindings)
+          {body_type, scoped_env} = infer(body, scoped_env)
+          scoped_env = Env.pop_scope(scoped_env)
+
+          {body_type, %{acc_env | types: scoped_env.types, exprs: scoped_env.exprs}}
+        end)
+
+      {Type.union(types), env}
+    else
+      infer(clauses, env)
+    end
+  end
+
+  defp infer_clauses(other, env), do: infer(other, env)
+
+  # Resolves one `fn` parameter's type from the bindings the pattern produced.
+  # Wildcards and non-variable patterns contribute `dynamic()`.
+  defp param_type(bindings, {var_name, _meta, ctx})
+       when is_atom(var_name) and is_atom(ctx) do
+    Map.get(bindings, var_name, Type.dynamic())
+  end
+
+  defp param_type(_bindings, _param), do: Type.dynamic()
+
+  # Falls back to the compiled module's signatures, or `dynamic()` when the
+  # module is unknown (e.g. analysing a file that is not compiled yet).
+  defp resolve_local(env, function, arity, arg_types) do
+    case env.module do
+      nil -> Type.dynamic()
+      mod -> SignatureStore.return_type(mod, function, arity, arg_types)
+    end
+  end
 
   # Walks map/keyword pairs, inferring each value. Tolerates shapes that are
   # not `{key, value}` tuples (the `:|` struct-update form has its own clause

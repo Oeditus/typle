@@ -33,20 +33,31 @@ defmodule Typle.SignatureStore do
   def load_project(build_path) do
     init()
 
-    beam_files =
-      build_path
-      |> Path.join("**/*.beam")
-      |> Path.wildcard()
+    if File.dir?(build_path) do
+      count =
+        build_path
+        |> beam_files()
+        |> Task.async_stream(&load_beam_file/1, max_concurrency: System.schedulers_online())
+        |> Enum.reduce(0, fn
+          {:ok, n}, acc -> acc + n
+          _, acc -> acc
+        end)
 
-    count =
-      beam_files
-      |> Task.async_stream(&load_beam_file/1, max_concurrency: System.schedulers_online())
-      |> Enum.reduce(0, fn
-        {:ok, n}, acc -> acc + n
-        _, acc -> acc
-      end)
+      {:ok, count}
+    else
+      # A missing build path used to return `{:ok, 0}`, which is
+      # indistinguishable from "the project simply has no beams".
+      {:error, {:not_a_directory, build_path}}
+    end
+  end
 
-    {:ok, count}
+  # Only the project's own output plus its dependencies' output -- not every
+  # `.beam` reachable from the build root, which pulled in unrelated apps and
+  # loaded thousands of rows nobody would ever look up.
+  defp beam_files(build_path) do
+    [Path.join(build_path, "lib/**/*.beam"), Path.join([build_path, "..", "lib", "**", "*.beam"])]
+    |> Enum.flat_map(&Path.wildcard/1)
+    |> Enum.uniq()
   end
 
   @doc """
@@ -120,11 +131,11 @@ defmodule Typle.SignatureStore do
   defp load_beam_file(beam_path) do
     case Beam.read_signatures(beam_path) do
       {:ok, signatures} ->
-        # Extract module name from beam filename
-        module =
-          beam_path
-          |> Path.basename(".beam")
-          |> String.to_atom()
+        # Resolve the module name from the beam itself rather than from the
+        # filename. `String.to_atom/1` on a basename would mint a permanent atom
+        # for every beam under the build path (4416 of them in this repo) and
+        # would silently mis-key any module whose name does not match its file.
+        module = beam_module(beam_path)
 
         Enum.each(signatures, fn %{fun: fun, arity: arity, clauses: clauses} ->
           :ets.insert(@table, {{module, fun, arity}, clauses})
@@ -135,6 +146,22 @@ defmodule Typle.SignatureStore do
       _ ->
         0
     end
+  end
+
+  # Prefers the atom the BEAM chunk already carries; falls back to the
+  # filename only when the chunk is unreadable.
+  #
+  # `:beam_lib.info/1` returns a bare keyword list on success (or
+  # `{:error, :beam_lib, reason}`), not an `{:ok, info}` tuple.
+  defp beam_module(beam_path) do
+    case :beam_lib.info(String.to_charlist(beam_path)) do
+      info when is_list(info) -> Keyword.get(info, :module) || filename_module(beam_path)
+      _ -> filename_module(beam_path)
+    end
+  end
+
+  defp filename_module(beam_path) do
+    beam_path |> Path.basename(".beam") |> String.to_atom()
   end
 
   defp try_load_and_lookup(module, function, arity) do

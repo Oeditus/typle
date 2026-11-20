@@ -15,12 +15,19 @@ defmodule Typle.Inference.Env do
           exprs: %{position() => String.t()},
           module: module() | nil,
           file: String.t() | nil,
-          aliases: %{atom() => module()}
+          aliases: %{atom() => module()},
+          fun_returns: %{{atom(), non_neg_integer()} => Type.t()}
         }
 
   @type position :: {non_neg_integer(), non_neg_integer()}
 
-  defstruct scopes: [%{}], types: %{}, exprs: %{}, module: nil, file: nil, aliases: %{}
+  defstruct scopes: [%{}],
+            types: %{},
+            exprs: %{},
+            module: nil,
+            file: nil,
+            aliases: %{},
+            fun_returns: %{}
 
   @doc "Creates a new empty environment."
   @spec new(keyword()) :: t()
@@ -139,5 +146,38 @@ defmodule Typle.Inference.Env do
     Enum.reduce(merged, env, fn {var, type}, acc ->
       put_var(acc, var, type)
     end)
+  end
+
+  @doc """
+  Records the inferred return type of a function defined in the file being
+  analysed.
+
+  This is what lets a call to a sibling `defp` resolve to a real type instead
+  of `dynamic()`: the compiled `.beam` for a file under edit is usually absent
+  or stale, so `Typle.SignatureStore` cannot answer for it. The key is
+  `{name, arity}`.
+
+  Repeated clauses union their return types, except that a `dynamic()`
+  placeholder (written by the pre-declaration pass) is *replaced* rather than
+  unioned -- `dynamic() or integer()` would collapse straight back to
+  `dynamic()`, defeating the whole point.
+  """
+  @spec put_fun_return(t(), atom(), non_neg_integer(), Type.t()) :: t()
+  def put_fun_return(%__MODULE__{fun_returns: returns} = env, name, arity, type) do
+    key = {name, arity}
+    merged = Map.update(returns, key, type, &merge_return(&1, type))
+    %{env | fun_returns: merged}
+  end
+
+  defp merge_return(%Type{dynamic?: true} = existing, type) do
+    if Type.term?(%{existing | dynamic?: false}), do: type, else: Type.union([existing, type])
+  end
+
+  defp merge_return(existing, type), do: Type.union([existing, type])
+
+  @doc "Returns the inferred return type for `name/arity`, or `nil` if unknown."
+  @spec get_fun_return(t(), atom(), non_neg_integer()) :: Type.t() | nil
+  def get_fun_return(%__MODULE__{fun_returns: returns}, name, arity) do
+    Map.get(returns, {name, arity})
   end
 end

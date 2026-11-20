@@ -13,8 +13,14 @@ defmodule Mix.Tasks.Typle do
     * `--unstable` - use the unstable compiler replay for deeper inference
     * `--format text|json` - output format (default: text)
 
+  ## Exit status
+
+  Exits non-zero when the query cannot be answered, so the task is safe to use
+  as a check in CI.
   """
   use Mix.Task
+
+  alias Mix.Tasks.Typle.Support
 
   @impl Mix.Task
   def run(args) do
@@ -24,53 +30,29 @@ defmodule Mix.Tasks.Typle do
         aliases: [u: :unstable, f: :format]
       )
 
-    format = Keyword.get(opts, :format, "text")
-    unstable? = Keyword.get(opts, :unstable, false)
+    {format, unstable?} = Support.parse_options(opts)
 
     case positional do
       [location] ->
         query(location, format, unstable?)
 
       _ ->
-        Mix.shell().error(
-          "Usage: mix typle <file>:<line>[:<col>] [--format text|json] [--unstable]"
-        )
+        Mix.raise("Usage: mix typle <file>:<line>[:<col>] [--format text|json] [--unstable]")
     end
   end
 
   defp query(location, format, unstable?) do
-    case parse_location(location) do
+    case Support.parse_location(location) do
       {:ok, file, line, col} ->
         result = Typle.type_at(file, line, col, unstable: unstable?)
         output_result(result, file, line, col, format)
 
       {:ok, file, line} ->
-        result = Typle.types_for_file(file, unstable: unstable?)
-        output_line_results(result, line, format)
+        result = Typle.types_for_file_with_skipped(file, unstable: unstable?)
+        output_line_results(result, file, line, format)
 
       :error ->
-        Mix.shell().error("Invalid location format. Use file:line or file:line:col")
-    end
-  end
-
-  defp parse_location(location) do
-    case String.split(location, ":") do
-      [file, line_str, col_str] ->
-        with {line, ""} <- Integer.parse(line_str),
-             {col, ""} <- Integer.parse(col_str) do
-          {:ok, file, line, col}
-        else
-          _ -> :error
-        end
-
-      [file, line_str] ->
-        case Integer.parse(line_str) do
-          {line, ""} -> {:ok, file, line}
-          _ -> :error
-        end
-
-      _ ->
-        :error
+        Mix.raise("Invalid location format. Use file:line or file:line:col")
     end
   end
 
@@ -91,33 +73,107 @@ defmodule Mix.Tasks.Typle do
     Mix.shell().info(:json.encode(data) |> IO.iodata_to_binary())
   end
 
-  defp output_result({:error, reason}, _file, _line, _col, _format) do
-    Mix.shell().error("Error: #{inspect(reason)}")
+  defp output_result({:error, reason}, file, line, col, _format) do
+    Mix.raise(Support.describe(reason, file: file, line: line, col: col))
   end
 
-  defp output_line_results({:ok, type_map}, line, "text") do
-    type_map
-    |> Enum.filter(fn {{l, _c}, _v} -> l == line end)
-    |> Enum.sort_by(fn {{_l, c}, _v} -> c end)
-    |> Enum.each(fn {{_l, col}, %{type: type, expr: expr}} ->
-      expr_suffix = if expr, do: "  (#{expr})", else: ""
-      Mix.shell().info("  col #{col}: #{Typle.Type.to_string(type)}#{expr_suffix}")
-    end)
+  defp output_line_results({:ok, type_map, skipped}, file, line, "text") do
+    entries = entries_on_line(type_map, line)
+
+    case entries do
+      [] ->
+        Mix.shell().info(empty_line_hint(type_map, file, line))
+
+      entries ->
+        Enum.each(entries, fn {col, type, expr} ->
+          expr_suffix = if expr, do: "  (#{expr})", else: ""
+          Mix.shell().info("  col #{col}: #{Typle.Type.to_string(type)}#{expr_suffix}")
+        end)
+    end
+
+    report_skipped(skipped)
   end
 
-  defp output_line_results({:ok, type_map}, line, "json") do
+  defp output_line_results({:ok, type_map, skipped}, _file, line, "json") do
     entries =
       type_map
-      |> Enum.filter(fn {{l, _c}, _v} -> l == line end)
-      |> Enum.sort_by(fn {{_l, c}, _v} -> c end)
-      |> Enum.map(fn {{_l, col}, %{type: type, expr: expr}} ->
+      |> entries_on_line(line)
+      |> Enum.map(fn {col, type, expr} ->
         %{column: col, type: Typle.Type.to_string(type), expr: expr}
       end)
 
-    Mix.shell().info(:json.encode(%{line: line, entries: entries}) |> IO.iodata_to_binary())
+    payload =
+      %{line: line, entries: entries}
+      |> maybe_put_skipped(skipped)
+
+    Mix.shell().info(:json.encode(payload) |> IO.iodata_to_binary())
   end
 
-  defp output_line_results({:error, reason}, _line, _format) do
-    Mix.shell().error("Error: #{inspect(reason)}")
+  defp output_line_results({:error, reason}, file, line, _format) do
+    Mix.raise(Support.describe(reason, file: file, line: line))
+  end
+
+  defp entries_on_line(type_map, line) do
+    type_map
+    |> Enum.filter(fn {{l, _c}, _v} -> l == line end)
+    |> Enum.sort_by(fn {{_l, c}, _v} -> c end)
+    |> Enum.map(fn {{_l, col}, %{type: type, expr: expr}} -> {col, type, expr} end)
+  end
+
+  # A line with no recorded positions is a dead end unless we say where the
+  # nearest answers are -- the data is already in the map.
+  defp empty_line_hint(type_map, file, line) do
+    case nearest_lines(type_map, line) do
+      [] ->
+        "No types recorded on line #{line} of #{file}, and no other lines have types either. " <>
+          "The file may not have parsed."
+
+      lines ->
+        "No types recorded on line #{line} of #{file}. " <>
+          "Nearest lines with types: #{Enum.join(lines, ", ")}"
+    end
+  end
+
+  defp nearest_lines(type_map, line) do
+    type_map
+    |> Map.keys()
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.uniq()
+    |> Enum.sort_by(&abs(&1 - line))
+    |> Enum.take(3)
+    |> Enum.sort()
+  end
+
+  # Inference skips forms it cannot handle rather than failing the file. Say so,
+  # otherwise a short result looks like a bug in the query.
+  defp report_skipped([]), do: :ok
+
+  defp report_skipped(skipped) do
+    count = length(skipped)
+    {line, reason} = hd(skipped)
+
+    Mix.shell().info(
+      "Note: #{count} top-level form(s) could not be inferred " <>
+        "(first at line #{line}: #{short_reason(reason)}). Results above are partial."
+    )
+  end
+
+  # Exception messages can span many lines; a one-line summary is what a CLI
+  # footer can actually show.
+  defp short_reason(reason) do
+    reason
+    |> String.split("\n")
+    |> List.first()
+    |> String.slice(0, 120)
+  end
+
+  defp maybe_put_skipped(payload, []), do: payload
+
+  defp maybe_put_skipped(payload, skipped) do
+    Map.put(
+      payload,
+      :skipped,
+      Enum.map(skipped, fn {line, reason} -> %{line: line, reason: short_reason(reason)} end)
+    )
   end
 end

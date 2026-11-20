@@ -115,8 +115,25 @@ defmodule Typle.Type do
   @spec function(list({list(t()), t()})) :: t()
   def function(clauses), do: %__MODULE__{kind: :function, params: clauses}
 
-  @doc "Returns a union of the given types. Single-element unions collapse."
+  @doc """
+  Returns a union of the given types. Single-element unions collapse.
+
+  An empty list is the union of nothing, which is the bottom type `none()`.
+  Without this clause `union([])` would build a `:union` with no members, which
+  `to_string/1` renders as the empty string -- an invalid type that silently
+  propagates into results.
+
+  ## Examples
+
+      iex> Typle.Type.to_string(Typle.Type.union([]))
+      "none()"
+
+      iex> Typle.Type.to_string(Typle.Type.union([Typle.Type.integer()]))
+      "integer()"
+
+  """
   @spec union(list(t())) :: t()
+  def union([]), do: none()
   def union([single]), do: single
 
   def union(types) do
@@ -134,8 +151,19 @@ defmodule Typle.Type do
     end
   end
 
-  @doc "Returns an intersection of the given types. Single-element intersections collapse."
+  @doc """
+  Returns an intersection of the given types. Single-element intersections collapse.
+
+  An empty list is the intersection of nothing, which is the top type `term()`.
+
+  ## Examples
+
+      iex> Typle.Type.to_string(Typle.Type.intersection([]))
+      "term()"
+
+  """
   @spec intersection(list(t())) :: t()
+  def intersection([]), do: term()
   def intersection([single]), do: single
   def intersection(types), do: %__MODULE__{kind: :intersection, params: types}
 
@@ -203,6 +231,11 @@ defmodule Typle.Type do
     inner = Enum.map_join(elements, ", ", &to_string/1)
     "{#{inner}}"
   end
+
+  # An open tuple with no fixed elements is just `tuple()`. Without this clause
+  # the generic one produced "{, ...}" -- a malformed rendering, since the
+  # `"{#{inner}, ...}"` template assumes at least one element.
+  defp format_kind(:tuple, {:open, []}), do: "tuple()"
 
   defp format_kind(:tuple, {:open, elements}) do
     inner = Enum.map_join(elements, ", ", &to_string/1)

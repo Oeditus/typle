@@ -12,9 +12,16 @@ defmodule Typle.Inference do
   alias Typle.Inference.{Env, Expander, Expr, Guard, Pattern}
   alias Typle.Type
 
+  require Logger
+
   @type type_map :: %{{non_neg_integer(), non_neg_integer()} => Type.t()}
   @type expr_map :: %{{non_neg_integer(), non_neg_integer()} => String.t()}
-  @type inference_result :: %{types: type_map(), exprs: expr_map()}
+  @type skipped_form :: {non_neg_integer(), String.t()}
+  @type inference_result :: %{
+          types: type_map(),
+          exprs: expr_map(),
+          skipped: [skipped_form()]
+        }
 
   @doc """
   Infers types for all expressions in the given source file.
@@ -35,11 +42,85 @@ defmodule Typle.Inference do
       with {:ok, ast} <- Expander.expand_file(file_path) do
         module = extract_module_name(ast)
         env = Env.new(module: module, file: file_path)
-        {_type, env} = walk_top_level(ast, env)
-        {:ok, %{types: Env.all_types(env), exprs: Env.all_exprs(env)}}
+        walk_file(ast, env)
       end
     end
   end
+
+  # Walks the whole file, degrading to partial results rather than raising.
+  #
+  # Inference is best-effort by design: an AST shape the walker does not
+  # understand should cost the user *that expression*, not the entire file.
+  # Without this guard a single empty `case`/`cond` (whose clauses expand to
+  # `{:__block__, _, []}` rather than a list) raised Protocol.UndefinedError
+  # out of `Expr.infer/2` and took down every type query for the file.
+  #
+  # Top-level forms are walked one at a time and each result is folded into the
+  # accumulator, so a form that raises only loses its own types -- everything
+  # already inferred from earlier forms is still returned.
+  defp walk_file(ast, env) do
+    forms = top_level_forms(ast)
+
+    # Two passes. The first infers every function's return type in an isolated
+    # environment and records it, so that a call to a sibling defined *later* in
+    # the file (`def a, do: b(x)` before `defp b`) resolves to a real type
+    # instead of falling through to a compiled-beam lookup that cannot succeed
+    # for a file that is not compiled yet. The second pass is the real walk,
+    # which records positions and now sees those return types.
+    env = Enum.reduce(forms, env, &declare_form/2)
+    {env, skipped} = Enum.reduce(forms, {env, []}, &walk_form/2)
+
+    {:ok,
+     %{
+       types: Env.all_types(env),
+       exprs: Env.all_exprs(env),
+       skipped: Enum.reverse(skipped)
+     }}
+  end
+
+  # Infers one definition's return type in a throwaway environment and records
+  # it. Types/exprs recorded during this probe are discarded -- the real walk
+  # re-records them -- so only `fun_returns` survives.
+  defp declare_form({kind, _meta, [head | _]} = form, env) when kind in [:def, :defp] do
+    {name, args} = unwrap_head(head)
+
+    if is_atom(name) and name != nil do
+      {type, _probe_env} = walk_definition(form, env)
+      Env.put_fun_return(env, name, length(args || []), type)
+    else
+      env
+    end
+  rescue
+    _ -> env
+  end
+
+  defp declare_form(_form, env), do: env
+
+  defp unwrap_head({:when, _, [head | _]}), do: unwrap_head(head)
+  defp unwrap_head({name, _meta, args}), do: {name, args}
+  defp unwrap_head(_), do: {nil, []}
+
+  # Flattens `defmodule` and `__block__` wrappers into the list of top-level
+  # forms, so each can be walked (and rescued) independently.
+  defp top_level_forms({:defmodule, _meta, [_name, [do: body]]}), do: top_level_forms(body)
+  defp top_level_forms({:__block__, _meta, exprs}), do: exprs
+  defp top_level_forms(other), do: [other]
+
+  defp walk_form(form, {acc_env, skipped}) do
+    {_type, next_env} = walk_top_level(form, acc_env)
+    {next_env, skipped}
+  rescue
+    e ->
+      message = Exception.message(e)
+      Logger.warning("Typle: skipping a top-level form in #{acc_env.file}: #{message}")
+
+      # Report the skipped form so callers can surface it instead of silently
+      # returning a smaller map than the user expects.
+      {acc_env, [{form_line(form), message} | skipped]}
+  end
+
+  defp form_line({_kind, meta, _args}) when is_list(meta), do: Keyword.get(meta, :line, 0)
+  defp form_line(_form), do: 0
 
   @doc """
   Infers types for all expressions in a compiled module.
@@ -131,7 +212,7 @@ defmodule Typle.Inference do
   defp walk_top_level(_other, env), do: {Type.dynamic(), env}
 
   defp walk_definition({_kind, _def_meta, [{:when, _, [head, guard]}, body_kw]}, env) do
-    {_fun_name, _meta, args} = head
+    {fun_name, _meta, args} = head
     args = args || []
 
     # Infer argument types from patterns (start with dynamic)
@@ -149,11 +230,11 @@ defmodule Typle.Inference do
     body = Keyword.get(body_kw, :do, nil)
     {type, env} = if body, do: Expr.infer(body, env), else: {Type.dynamic(), env}
     env = Env.pop_scope(env)
-    {type, env}
+    {type, record_return(env, fun_name, args, type)}
   end
 
   defp walk_definition({_kind, _def_meta, [head, body_kw]}, env) do
-    {_fun_name, _meta, args} = head
+    {fun_name, _meta, args} = head
     args = args || []
 
     {bindings, env} =
@@ -166,10 +247,19 @@ defmodule Typle.Inference do
     body = Keyword.get(body_kw, :do, nil)
     {type, env} = if body, do: Expr.infer(body, env), else: {Type.dynamic(), env}
     env = Env.pop_scope(env)
-    {type, env}
+    {type, record_return(env, fun_name, args, type)}
   end
 
   defp walk_definition(_, env), do: {Type.dynamic(), env}
+
+  # Remembers this function's return type so later calls to it -- including
+  # calls to a sibling `defp` that has no compiled `.beam` yet -- resolve to a
+  # real type instead of `dynamic()`.
+  defp record_return(env, name, args, type) when is_atom(name) and name != nil do
+    Env.put_fun_return(env, name, length(args), type)
+  end
+
+  defp record_return(env, _name, _args, _type), do: env
 
   defp merge_positions(env, positions) do
     Enum.reduce(positions, env, fn {{line, col}, {type, expr}}, acc ->

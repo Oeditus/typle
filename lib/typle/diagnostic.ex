@@ -28,10 +28,14 @@ defmodule Typle.Diagnostic do
         beam_timestamp: nil
       )
 
+    # `ParallelCompiler.compile/2` returns the warnings as a *map*
+    # (`%{compile_warnings: [...], runtime_warnings: [...]}`), not a list. The
+    # previous `errors ++ warnings` therefore raised on every call that produced
+    # an error, and `warnings` alone fed a map into `Enum.filter/2`.
     diagnostics =
       case result do
-        {:ok, _modules, warnings} -> warnings
-        {:error, errors, warnings} -> errors ++ warnings
+        {:ok, _modules, warnings} -> diagnostics_list(warnings)
+        {:error, errors, warnings} -> diagnostics_list(errors) ++ diagnostics_list(warnings)
       end
 
     infos =
@@ -52,31 +56,35 @@ defmodule Typle.Diagnostic do
 
   # -- Private ---------------------------------------------------------------
 
-  defp type_diagnostic?(%{message: message}) when is_binary(message) do
-    String.contains?(message, "typing violation") or
-      String.contains?(message, "incompatible types") or
-      String.contains?(message, "unknown key") or
-      String.contains?(message, "given types:")
+  # Normalises the compiler's diagnostics container to a flat list. Depending on
+  # the Elixir version and outcome this is either a plain list or a map of
+  # `%{compile_warnings: [...], runtime_warnings: [...]}`.
+  defp diagnostics_list(list) when is_list(list), do: list
+
+  defp diagnostics_list(%{} = map) do
+    Map.get(map, :compile_warnings, []) ++ Map.get(map, :runtime_warnings, [])
   end
 
-  defp type_diagnostic?(%{message: message}) when is_list(message) do
-    text = IO.chardata_to_string(message)
+  @type_markers [
+    "typing violation",
+    "incompatible types",
+    "unknown key",
+    "given types:"
+  ]
 
-    String.contains?(text, "typing violation") or
-      String.contains?(text, "incompatible types") or
-      String.contains?(text, "unknown key") or
-      String.contains?(text, "given types:")
+  defp type_diagnostic?(%{message: message}) do
+    text = message_text(message)
+    Enum.any?(@type_markers, &String.contains?(text, &1))
   end
 
   defp type_diagnostic?(_), do: false
 
+  defp message_text(message) when is_binary(message), do: message
+  defp message_text(message) when is_list(message), do: IO.chardata_to_string(message)
+  defp message_text(_), do: ""
+
   defp parse_diagnostic(%{} = diag) do
-    message =
-      case diag.message do
-        msg when is_binary(msg) -> msg
-        msg when is_list(msg) -> IO.chardata_to_string(msg)
-        _ -> ""
-      end
+    message = message_text(Map.get(diag, :message))
 
     %{
       file: Map.get(diag, :file, ""),

@@ -187,11 +187,30 @@ compiler computes. It will never achieve perfect parity because:
 When Typle cannot determine a type, it honestly returns `dynamic()` rather
 than guessing wrong.
 
+### Known blind spots
+
+These are the places where `dynamic()` is most likely to appear. Knowing them
+saves a debugging session:
+
+- **Anonymous function bodies.** `fn` parameters and bodies are inferred, but
+  a `fn` is not inlined into the call that receives it, so
+  `Enum.map(list, fn x -> x + 1 end)` yields `list(dynamic())`, not
+  `list(integer())`.
+- **Calls to sibling functions** resolve only when the sibling is defined in
+  the same file. A call into another module in the same project still depends
+  on that module being compiled.
+- **`with`/`try` error branches** contribute to the union, but `case` guards are
+  only refined for the `is_*` family and comparison operators.
+- **A construct the walker cannot parse** (for example an empty `case`) skips
+  that top-level form. `mix typle` prints a `Note:` footer when this happens;
+  `Typle.types_for_file_with_skipped/2` returns the details.
+
 ## Not yet implemented
 
 - [ ] Type annotations / signatures (Elixir does not yet have user-facing type syntax)
 - [ ] Protocol dispatch type tracking
 - [ ] Cross-module dataflow analysis beyond function signatures
+- [ ] Inlining `fn` bodies into the higher-order call that receives them
 
 ## License
 

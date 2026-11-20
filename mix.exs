@@ -44,6 +44,7 @@ defmodule Typle.MixProject do
       # -- invalid AST that `Macro.to_string/1` cannot even print, so inference
       # crashed on every `with` or `for` it met. 0.2.x is affected.
       {:ex_panda, "~> 0.3"},
+      {:stream_data, "~> 1.1", only: [:test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}

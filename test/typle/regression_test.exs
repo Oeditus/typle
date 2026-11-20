@@ -5,6 +5,139 @@ defmodule Typle.RegressionTest do
 
   @fixture Path.expand("../support/struct_update_module.ex", __DIR__)
 
+  # A fixture written per-test into a temp dir, so each case isolates the one
+  # construct under test rather than sharing a grab-bag file.
+  defp infer_source(source) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "typle_regression_#{System.unique_integer([:positive])}.ex"
+      )
+
+    File.write!(path, source)
+
+    try do
+      Inference.infer_file(path)
+    after
+      File.rm(path)
+    end
+  end
+
+  # Branch types are folded into a union at the construct's position, so the
+  # atom is not necessarily recorded as a standalone entry.
+  defp contains_atom?(type_map, atom) do
+    Enum.any?(type_map, fn {_pos, type} -> atom_in?(type, atom) end)
+  end
+
+  defp atom_in?(%Typle.Type{kind: :atom, params: atom}, atom), do: true
+
+  defp atom_in?(%Typle.Type{kind: :union, params: types}, atom),
+    do: Enum.any?(types, &atom_in?(&1, atom))
+
+  defp atom_in?(_type, _atom), do: false
+
+  describe "a construct inference cannot handle" do
+    test "does not abort the rest of the file" do
+      # Regression: an empty `case` expands to `{:__block__, _, []}`, which the
+      # clause reducer in Expr.infer/2 could not enumerate, raising
+      # Protocol.UndefinedError. infer_file/2 had no rescue, so one such
+      # construct returned zero types for the entire file.
+      {:ok, %{types: types}} =
+        infer_source("""
+        defmodule Typle.Regression.EmptyCase do
+          def before(x), do: x + 1
+
+          def broken(x) do
+            case x do
+            end
+          end
+
+          def after_it(y), do: y
+        end
+        """)
+
+      lines = types |> Map.keys() |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+
+      assert 2 in lines, "expected the function before the bad one to be inferred"
+      assert 9 in lines, "expected the function after the bad one to be inferred"
+    end
+  end
+
+  describe "anonymous functions" do
+    test "infers the body and records the parameter" do
+      # Regression: the `fn` clause ignored its clauses entirely and returned a
+      # zero-arity function type, so the body was never walked.
+      {:ok, %{types: types, exprs: exprs}} =
+        infer_source("""
+        defmodule Typle.Regression.Fn do
+          def f(list) do
+            Enum.map(list, fn item -> item + 1 end)
+          end
+        end
+        """)
+
+      fn_types = for {_pos, %Typle.Type{kind: :function} = t} <- types, do: t
+      assert [%Typle.Type{params: [{[_arg], ret}]}] = fn_types
+      assert ret.kind == :union
+      assert Enum.any?(Map.values(exprs), &(&1 == "item"))
+    end
+  end
+
+  describe "with/else and try/rescue" do
+    test "records the else branch" do
+      # Regression: only `:do` was read, so error branches were invisible.
+      {:ok, %{types: types}} =
+        infer_source("""
+        defmodule Typle.Regression.WithElse do
+          def f(x) do
+            with {:ok, a} <- x do
+              a
+            else
+              _ -> :boom
+            end
+          end
+        end
+        """)
+
+      assert contains_atom?(types, :boom)
+    end
+
+    test "records the rescue branch" do
+      {:ok, %{types: types}} =
+        infer_source("""
+        defmodule Typle.Regression.TryRescue do
+          def f(x) do
+            try do
+              x
+            rescue
+              _ -> :rescued
+            end
+          end
+        end
+        """)
+
+      assert contains_atom?(types, :rescued)
+    end
+  end
+
+  describe "calls to sibling functions" do
+    test "resolve a defp defined later in the file" do
+      # Regression: local calls consulted only the compiled beam, which does not
+      # exist for a file under analysis, so every sibling call was dynamic().
+      {:ok, %{types: types}} =
+        infer_source("""
+        defmodule Typle.Regression.Sibling do
+          def a(x), do: b(x)
+          defp b(y), do: y + 1
+        end
+        """)
+
+      # {2, 17} is the `b(x)` call site.
+      assert %Typle.Type{} = type = Map.get(types, {2, 17})
+      refute Typle.Type.term?(type), "expected b/1's inferred return type, got dynamic()"
+    end
+  end
+
   describe "struct update syntax (%{struct | key: value})" do
     test "does not crash inference" do
       # Regression: the AST is `{:%{}, _, [{:|, _, [struct, [key: value]]}]}`, so

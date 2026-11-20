@@ -217,9 +217,8 @@ defmodule Typle.Inference.Pattern do
 
   # -- Element extraction -----------------------------------------------------
 
-  @doc false
   # Extracts the type at a given index from a (possibly union/dynamic) tuple type.
-  def extract_tuple_element(%Type{dynamic?: true} = type, index) do
+  defp extract_tuple_element(%Type{dynamic?: true} = type, index) do
     inner = %{type | dynamic?: false}
 
     case extract_tuple_element(inner, index) do
@@ -228,21 +227,21 @@ defmodule Typle.Inference.Pattern do
     end
   end
 
-  def extract_tuple_element(%Type{kind: :tuple, params: {:closed, elems}}, index) do
+  defp extract_tuple_element(%Type{kind: :tuple, params: {:closed, elems}}, index) do
     Enum.at(elems, index) || Type.dynamic()
   end
 
-  def extract_tuple_element(%Type{kind: :tuple, params: {:open, elems}}, index) do
+  defp extract_tuple_element(%Type{kind: :tuple, params: {:open, elems}}, index) do
     Enum.at(elems, index) || Type.dynamic()
   end
 
-  def extract_tuple_element(%Type{kind: :union, params: types}, index) do
+  defp extract_tuple_element(%Type{kind: :union, params: types}, index) do
     types
     |> Enum.map(&extract_tuple_element(&1, index))
     |> Type.union()
   end
 
-  def extract_tuple_element(_type, _index), do: Type.dynamic()
+  defp extract_tuple_element(_type, _index), do: Type.dynamic()
 
   defp extract_list_element(%Type{dynamic?: true} = type) do
     inner = %{type | dynamic?: false}
